@@ -19,6 +19,20 @@ jobs:
       - run: pip install ruff
       - run: ruff check src tests
 
+  mypy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install package + mypy
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Enforce mypy --strict on src/ (Stage 4 gate)
+        run: mypy
+
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -55,3 +69,72 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: pytest -v -m gui
+
+  gaze:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install package with gaze extra
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,gaze]"
+      - name: Run gaze research tests (synthetic rig)
+        run: pytest -v -m gaze
+
+  test-windows:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Ensure ffmpeg (preinstalled on windows runners; install if absent)
+        run: |
+          if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
+            choco install -y ffmpeg
+          }
+          ffmpeg -version | Select-Object -First 1
+      - name: Install package + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Run engine tests on Windows (extras auto-skip)
+        run: pytest -v -m "not (gui or gaze)"
+
+  package-windows:
+    runs-on: windows-latest
+    needs: [lint, mypy]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install app + gui extra + pyinstaller
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[gui,dev]"
+          pip install pyinstaller
+      - name: Build one-folder package
+        run: pyinstaller --noconfirm packaging/openclip.spec
+      - name: Smoke-test packaged CLI
+        run: |
+          dist\OpenClipStudio\OpenClipCLI.exe --version
+          dist\OpenClipStudio\OpenClipCLI.exe probe --help
+      - name: Archive package
+        run: Compress-Archive -Path dist\OpenClipStudio -DestinationPath OpenClipStudio-windows-x64.zip
+      - name: Checksum
+        run: Get-FileHash OpenClipStudio-windows-x64.zip -Algorithm SHA256 | Out-File sha256.txt
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenClipStudio-windows-x64
+          path: |
+            OpenClipStudio-windows-x64.zip
+            sha256.txt
+          retention-days: 14
