@@ -27,8 +27,8 @@ Last updated: 2026-10-09, end of Stage 5 (all planned stages executed; awaiting 
 | 1 Engine core (alignment, cuts, captions, audio, render, CLI) | PR #1 `feature/engine-core` | green CI, awaiting owner |
 | 2 Desktop app (PySide6, cut review, threaded export) | PR #2 `feature/desktop-app` | green CI, awaiting owner |
 | 3 Eye-contact research (rig, detector, warp, eval harness) | PR #3 `feature/eye-contact` | green CI, awaiting owner |
-| 4 CI matrix + Windows packaging | PR #4 `feature/ci-packaging` | final dispatch in flight (first run had a mypy-job gap: PySide6 stubs; fixed b6f8497) |
-| 5 Hardening + handoff | branch `feature/hardening` (this + docs/OWNER_VALIDATION.md) | PR to open after #4's run is green |
+| 4 CI matrix + Windows packaging | PR #4 `feature/ci-packaging` | green CI (9/9 jobs; Windows artifact built, 97 MB zip + sha256) |
+| 5 Hardening + handoff | PR #5 `feature/hardening` | green CI (9/9 jobs) — owner validation doc, docs map, this file |
 
 Key measured results (all reproducible via `pytest -m gaze`):
 - Gaze detection E1: 1.36 px mean error; correction E2: 65.8% mean offset
@@ -46,9 +46,9 @@ Key measured results (all reproducible via `pytest -m gaze`):
 
 ## In flight
 
-- PR #4 final CI dispatch (run includes windows package build + smoke).
-- feature/hardening: owner-validation doc + final docs polish; PR #5 opens
-  after that run is green.
+- Nothing. All five stage PRs are open with green CI (each branch verified by
+  a dispatched full run of all nine CI jobs, including the Windows package
+  build + frozen-CLI smoke test + artifact upload).
 
 ## Blocked
 
