@@ -1,99 +1,97 @@
 # CHECKPOINT — exact, resumable progress state
 
-Last updated: 2026-10-09 (Stage 3 complete on branch; PRs #1 #2 pending, #3 about to open)
+Last updated: 2026-10-09, end of Stage 5 (all planned stages executed; awaiting owner review)
 
-## Environment (dev sandbox where this work runs)
+## Environment (dev sandbox where this work ran)
 
 - Linux aarch64 (Debian 12), 8 vCPU (shared/throttled — identical ffmpeg runs
   measured 7s–290s), 7.5 GB RAM, no GPU, no camera.
 - Python 3.11.2 (venv `.venv/`), FFmpeg 5.1.9 (apt) + imageio-ffmpeg wheel,
   espeak-ng 1.51 (ASR test fixtures), opencv-python 4.14 (pinned <5: OpenCV
-  5.0 removed CascadeClassifier), PySide6 6.8.0.2 + system Qt libs,
-  faster-whisper (tiny model cached) — internet available.
+  5.0 removed CascadeClassifier), PySide6 6.8.0.2 + system Qt libs
+  (libegl1 libgl1 libxkbcommon0 libglib2.0-0 libdbus-1-3 libfontconfig1
+  libpulse0 — same set CI installs), faster-whisper (tiny model cached),
+  pyinstaller 6.22 (spec validated locally).
 - GUI tests run offscreen (`QT_QPA_PLATFORM=offscreen`); QMediaPlayer has no
   backend in this minimal sandbox (warnings only; works on real desktops).
 - `gh` authenticated as `eslteacherhubz` (repo + workflow scopes).
-- Windows **not** available here; covered by CI (`windows-latest`, Stage 4)
-  and by owner validation on the real machine.
+- Windows **not** available here: covered by CI (`windows-latest` engine
+  tests + packaging smoke) and deferred to owner validation
+  (docs/OWNER_VALIDATION.md).
 
-## Done
+## Done — full 72-hour plan executed
 
-- **Stage 0** (main d71452f): governing docs, LICENSE GPL-3.0, editor
-  verification research (docs/research/EDITOR_VERIFICATION.md), scaffold.
-- **Stage 1** (PR #1 `feature/engine-core`, CI green): headless engine —
-  ffprobe(+fallback) probing, silencedetect, deterministic synthetic lesson
-  (planted flub + long silence), bilingual script parsing, monotonic fuzzy
-  aligner (token_sort_ratio) + faster-whisper + even fallback, cut planner
-  (silence/filler/off-script, reasons, tiny-island absorption), animated
-  bilingual ASS (fade/pop/slide/karaoke), FFmpeg audio presets, render
-  (segment+concat+final pass, source→export caption time mapping), project
-  JSON, CLI probe/synth/new/align/plan/render/auto.
-- **CI plumbing**: workflow registered on main (infra-only 3317ad9, decision
-  D10 — GitHub only registers workflows from the default branch). Pitfalls
-  fixed: unquoted colon in step names breaks Actions YAML; validate with
-  actionlint (binary at /tmp/opencode/actionlint).
-- **Stage 2** (PR #2 `feature/desktop-app`, stacked on #1): PySide6 GUI —
-  script editor, cut-review table (keep/cut checkboxes, double-click seek),
-  caption/audio/transcriber settings, threaded workers + progress bar,
-  preview player, `openclip-gui`/`openclip gui` entry points, 4 offscreen
-  tests + CI `gui` job.
-- **Stage 3** (branch `feature/eye-contact`, PR next): gaze research package
-  (`gaze` extra) — synthetic eye rig with ground truth, morphological dark-
-  blob iris detector (aperture bbox search; close→erode→dilate + aspect
-  filters; E1: 1.36px mean err, 8.3% miss at extremes), warp-based iris
-  redirection with tight cosine falloff (pivotal experiment E5a: reach 2.3
-  → 15.8% reduction [whole sclera slides]; reach 1.35 → 92.8%; E2 grid:
-  14.6%→6.4% = 65.8% mean reduction; PSNR outside eye 99dB; E4: 147 fps
-  CPU), TemporalSmoother, video apply/analyze with audio remux, CLI
-  gaze-analyze/gaze-apply, 7 gaze tests, full experiment record in
-  docs/EYE_CONTACT_RESEARCH.md incl. owner validation checklist. No
-  real-footage claims made anywhere.
-- All gates green at each stage: ruff, mypy --strict (24 files), full pytest
-  suite (33 tests: engine unit/integration, ASR (skippable), GUI, gaze).
+| Stage | Where | State |
+|---|---|---|
+| 0 Bootstrap (docs, license, editor verification) | `main` d71452f + CI infra 3317ad9/a608f2a | merged |
+| 1 Engine core (alignment, cuts, captions, audio, render, CLI) | PR #1 `feature/engine-core` | green CI, awaiting owner |
+| 2 Desktop app (PySide6, cut review, threaded export) | PR #2 `feature/desktop-app` | green CI, awaiting owner |
+| 3 Eye-contact research (rig, detector, warp, eval harness) | PR #3 `feature/eye-contact` | green CI, awaiting owner |
+| 4 CI matrix + Windows packaging | PR #4 `feature/ci-packaging` | final dispatch in flight (first run had a mypy-job gap: PySide6 stubs; fixed b6f8497) |
+| 5 Hardening + handoff | branch `feature/hardening` (this + docs/OWNER_VALIDATION.md) | PR to open after #4's run is green |
+
+Key measured results (all reproducible via `pytest -m gaze`):
+- Gaze detection E1: 1.36 px mean error; correction E2: 65.8% mean offset
+  reduction (75.6% @ ±5%, 80.0% @ ±15%, 34% @ ±25% — warp-method limit,
+  documented); E3: 99 dB PSNR outside eye; E4: 147 fps CPU; pivotal
+  parameter study E5: displacement-field reach 2.3× → 15.8% reduction
+  (sclera slides with iris) vs 1.35× → 92.8% — see
+  docs/EYE_CONTACT_RESEARCH.md. Synthetic rig only; NO real-footage claims.
+- Engine: 33-test suite (unit + real-render integration + PSNR
+  caption-burn proof + CLI E2E + real whisper-on-espeak ASR (skips in CI)
+  + 4 offscreen GUI tests + 7 gaze tests). mypy --strict clean (24 files),
+  ruff clean. PyInstaller spec validated on Linux (frozen CLI: --version,
+  synth, probe; frozen GUI launches offscreen; imageio-ffmpeg binary is
+  collected into the bundle).
 
 ## In flight
 
-- PR #1 (Stage 1), PR #2 (Stage 2) — awaiting owner review/merge.
-- Stage 3 PR about to open (base main, stacked).
+- PR #4 final CI dispatch (run includes windows package build + smoke).
+- feature/hardening: owner-validation doc + final docs polish; PR #5 opens
+  after that run is green.
 
 ## Blocked
 
-- Nothing. Real-footage eye-contact validation is deferred to the owner by
-  design (checklist in docs/EYE_CONTACT_RESEARCH.md §5), not blocked.
+- Nothing. Real-hardware/real-footage validation is deliberately deferred to
+  the owner (docs/OWNER_VALIDATION.md) — per master prompt, no
+  production-readiness claims were made.
 
-## Next steps (in order)
+## Next steps for the owner (in order)
 
-1. Open PR for `feature/eye-contact`; dispatch a CI run for it
-   (`gh workflow run ci.yml --ref feature/eye-contact`) since PR-event CI
-   has been unreliable in this repo.
-2. Stage 4: branch `feature/ci-packaging` — expand CI matrix to
-   windows-latest (pytest incl. gui import test), add PyInstaller one-folder
-   Windows build job with SHA-256 artifact, final dependency-ledger pass,
-   keep mypy strict gate.
-3. Stage 5: hardening — README quickstart with the 5-step GUI path, final
-   CHECKPOINT, owner validation checklist consolidated; tag v0.1.0-rc1 only
-   if owner merges and all gates pass.
+1. Review PRs #1 → #2 → #3 → #4 → #5 (stacked; merge in order). All have
+   green (or for #4/#5: expected-green) CI. Do NOT trust claims — spot-check:
+   `pip install -e ".[dev]" && pytest -v` on any machine.
+2. Download the `OpenClipStudio-windows-x64` artifact from the last green
+   `ci` run on `main` after merging, and run docs/OWNER_VALIDATION.md on the
+   real Windows machine (10–20 min of recording + reporting).
+3. Paste gaze numbers/verdicts back into docs/EYE_CONTACT_RESEARCH.md §5/§6.
+4. If validation is satisfactory, tag `v0.1.0-rc1` on `main`.
+5. Natural next features (not in the 72h bound): blink gating for gaze
+   (needs real footage), MediaPipe FaceMesh backend, retake grouping in the
+   cut planner, GUI timeline waveform, i18n of the UI itself.
 
 ## Key technical notes for resuming sessions
 
-- `probe()` reads ffprobe JSON key `codec_type` (not `type`).
+- `probe()` reads ffprobe JSON key `codec_type` (not `type`); falls back to
+  parsing `ffmpeg -i` (works in the frozen bundle without ffprobe).
 - ASR fixtures need espeak-ng speech; sine tones produce no words.
 - Synth lesson is 320x180@15fps CRF24 by design (throttled box); tests
-  assert the size.
-- Aligner: rapidfuzz `token_sort_ratio` (token_set_ratio is subset-lenient).
+  assert the size. Longest silence is the 1.8s tail, not the 1.6s mid gap.
+- Aligner: rapidfuzz `token_sort_ratio` (token_set_ratio is subset-lenient
+  and matches wrong windows).
 - `run_ffmpeg` prepends `-hide_banner -nostdin` (stdin hangs otherwise).
-- OpenCV pinned <5 (5.0 removed CascadeClassifier); cv2.remap needs
-  float32 maps; `connectedComponentsWithStats` connectivity is keyword-only
-  in the stubs (positional lands on `labels`).
+- OpenCV pinned <5; cv2.remap needs float32 maps;
+  `connectedComponentsWithStats` connectivity is keyword-only in stubs.
 - Gaze detector: search = aperture bbox rectangle (NOT the bright-aperture
-  mask — that would exclude the dark pupil); iris radius ≈ blob extent ×
-  0.55 (extent is a diameter).
-- Actions YAML: no unquoted `word: word` in step names; actionlint before
-  push; PR-event CI unreliable here — use workflow_dispatch for branches.
+  mask — that excludes the dark pupil); iris radius ≈ blob extent × 0.55.
+- Actions YAML: no unquoted `word: word` in step names; actionlint
+  (/tmp/opencode/actionlint) before pushing; PR-event CI is unreliable in
+  this repo — use `gh workflow run ci.yml --ref <branch>` for branch runs.
+- mypy CI job needs `[dev,gui]` (PySide6 ships the stubs mypy checks against).
 
 ## Resume protocol for a new session
 
 1. Read this file top to bottom.
-2. `git status` + `git log --oneline -10` + `gh pr list` to see actual state.
-3. Continue from the first unfinished item in "Next steps".
+2. `git status` + `git log --oneline -10` + `gh pr list` + `gh run list`.
+3. Continue from the first unfinished item in "Next steps for the owner".
 4. Obey AGENTS.md. Update this file before stopping.
