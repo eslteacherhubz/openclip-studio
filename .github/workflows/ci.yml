@@ -26,10 +26,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install package + mypy (gui extra for PySide6 stubs)
+      - name: Install package + mypy (extras provide stubs for gui/gaze)
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev,gui]"
+          pip install -e ".[dev,gui,gaze]"
       - name: Enforce mypy --strict on src/ (Stage 4 gate)
         run: mypy
 
