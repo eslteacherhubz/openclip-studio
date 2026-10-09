@@ -34,12 +34,12 @@ checkboxes in the same PR that completes the stage.
 
 ## Stage 3 — eye-contact research
 
-- [ ] Synthetic eye rig generates parameterized eyes with ground-truth gaze offsets
-- [ ] At least two experiments documented in docs/EYE_CONTACT_RESEARCH.md with method, parameters, numbers, verdict
-- [ ] Warp-based correction reduces iris-center error on the rig by ≥60% at ≤25% eye-width offsets without dropping PSNR outside the eye region below 35 dB (rig-validated; real-footage claim explicitly deferred)
-- [ ] `openclip gaze-analyze` and `openclip gaze-apply` work behind the `gaze` extra + flag; degrade cleanly when opencv missing
-- [ ] On-target (owner Windows PC) validation checklist written; no production claim made
-- [ ] PR opened from `feature/eye-contact`
+- [x] Synthetic eye rig generates parameterized eyes with ground-truth gaze offsets
+- [x] At least two experiments documented in docs/EYE_CONTACT_RESEARCH.md with method, parameters, numbers, verdict (E1–E5, incl. reach-factor and offset-limit parameter studies)
+- [x] Warp-based correction reduces iris-center error on the rig by ≥60% at ≤25% eye-width offsets without dropping PSNR outside the eye region below 35 dB (measured: 65.8% mean reduction, 99 dB — rig-validated; real-footage claim explicitly deferred)
+- [x] `openclip gaze-analyze` and `openclip gaze-apply` work behind the `gaze` extra + flag; degrade cleanly when opencv missing
+- [x] On-target (owner Windows PC) validation checklist written; no production claim made
+- [ ] PR opened from `feature/eye-contact` → merged by owner
 
 ## Stage 4 — CI + packaging
 
@@ -65,7 +65,7 @@ Every runtime/test dependency, license, and where it is used. Keep in sync with 
 | imageio-ffmpeg | >=0.4.9 | Apache-2.0 (wheel) / FFmpeg binaries: GPL/LGPL builds | guaranteed ffmpeg binary fallback | subprocess only, never imported for frames |
 | rapidfuzz | >=3 | MIT | fuzzy word alignment | |
 | numpy | >=1.26 | BSD-3-Clause | gaze math | extra `gaze` |
-| opencv-python | >=4.8 | Apache-2.0 | face/eye detection, warping | extra `gaze` |
+| opencv-python | >=4.8,<5 | Apache-2.0 | face/eye detection, warping | extra `gaze`; OpenCV 5.0 removed CascadeClassifier — pin <5 |
 | faster-whisper | >=1.0 | MIT | local ASR | extra `asr`; models downloaded once, offline thereafter |
 | ctranslate2 | (via faster-whisper) | MIT | ASR runtime | |
 | PySide6 | >=6.6 | LGPL-3.0 (also GPL-3) | GUI | extra `gui`; LGPL use via unmodified pip wheel |
