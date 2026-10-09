@@ -1,0 +1,77 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eterna-openclip-studio"
+version = "0.1.0.dev0"
+description = "Bilingual teaching-video editor for language educators: script-aligned smart cuts, animated bilingual captions, audio enhancement, MP4 export."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "Eterna OpenClip Studio contributors" }]
+keywords = ["video", "editor", "esl", "teaching", "captions", "ffmpeg"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: Console",
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: Education",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Video :: Non-Linear Editor",
+]
+dependencies = [
+    "imageio-ffmpeg>=0.4.9",
+    "rapidfuzz>=3.0",
+]
+
+[project.optional-dependencies]
+asr = ["faster-whisper>=1.0"]
+gaze = ["numpy>=1.26", "opencv-python>=4.8"]
+gui = ["PySide6>=6.6"]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.4",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+openclip = "openclip.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/eslteacherhubz/openclip-studio"
+Issues = "https://github.com/eslteacherhubz/openclip-studio/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+openclip = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "asr: requires the optional 'asr' extra (faster-whisper)",
+    "gaze: requires the optional 'gaze' extra (numpy/opencv)",
+    "gui: requires the optional 'gui' extra (PySide6)",
+    "slow: long-running integration tests",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["SIM108"]
+
+[tool.mypy]
+strict = true
+python_version = "3.11"
+files = ["src/openclip"]
+mypy_path = "src"
