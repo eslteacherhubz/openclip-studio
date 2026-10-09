@@ -33,7 +33,7 @@ jobs:
           pip install -e ".[dev]"
       - name: Show ffmpeg
         run: ffmpeg -version | head -1
-      - name: Run engine tests (ASR tests skip: no models in CI)
+      - name: Run engine tests (ASR tests auto-skip without models)
         run: pytest -v -m "not (asr or slow)"
       - name: Run slow render tests
         run: pytest -v -m "slow and not asr"
