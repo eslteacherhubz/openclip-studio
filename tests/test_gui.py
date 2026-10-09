@@ -99,6 +99,8 @@ def test_analysis_populates_cut_table(window) -> None:
 
 
 def test_gui_entry_declines_without_media() -> None:
+    if not _qt_available():
+        pytest.skip("PySide6 (gui extra) not installed")
     from openclip.gui.main_window import MainWindow
 
     win = MainWindow()
