@@ -170,6 +170,18 @@ def _cmd_auto(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_gui(args: argparse.Namespace) -> int:
+    try:
+        from openclip.gui.app import main as gui_main
+    except ImportError as exc:
+        print(
+            "GUI requires the 'gui' extra: pip install eterna-openclip-studio[gui]",
+            file=sys.stderr,
+        )
+        raise SystemExit(2) from exc
+    return gui_main(args.argv)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="openclip",
@@ -230,6 +242,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--audio-preset", default=None)
     add_transcriber(sp)
     sp.set_defaults(func=_cmd_auto)
+
+    sp = sub.add_parser("gui", help="launch the desktop app (needs the 'gui' extra)")
+    sp.add_argument("argv", nargs="*", help="arguments passed to Qt")
+    sp.set_defaults(func=_cmd_gui)
 
     return p
 

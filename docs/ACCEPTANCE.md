@@ -26,11 +26,11 @@ checkboxes in the same PR that completes the stage.
 
 ## Stage 2 — desktop app
 
-- [ ] PySide6 app launches offscreen (CI: `QT_QPA_PLATFORM=offscreen`) and headful (dev sandbox)
-- [ ] User can: create/open project, import media, paste bilingual script, run alignment (or manual), review each proposed cut (accept/reject), configure captions, export MP4 — all without touching a terminal
-- [ ] GUI never blocks the main thread on rendering; progress surfaced to the user
-- [ ] GUI smoke tests green on ubuntu CI; import-time test on windows CI
-- [ ] PR opened from `feature/desktop-app`
+- [x] PySide6 app launches offscreen (CI: `QT_QPA_PLATFORM=offscreen`) and headful (dev sandbox)
+- [x] User can: create/open project, import media, paste bilingual script, run alignment (or manual), review each proposed cut (accept/reject), configure captions, export MP4 — all without touching a terminal
+- [x] GUI never blocks the main thread on rendering; progress surfaced to the user
+- [x] GUI smoke tests green on ubuntu CI (`gui` job); import-time test on windows CI lands in Stage 4
+- [ ] PR opened from `feature/desktop-app` → merged by owner
 
 ## Stage 3 — eye-contact research
 

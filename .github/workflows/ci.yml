@@ -37,3 +37,21 @@ jobs:
         run: ffmpeg -version | head -1
       - name: Run tests (ASR integration auto-skips in CI)
         run: pytest -v
+
+  gui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Qt system libraries
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libglib2.0-0 libdbus-1-3 libfontconfig1
+      - name: Install package with gui extra
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,gui]"
+      - name: Run GUI tests offscreen
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: pytest -v -m gui
