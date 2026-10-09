@@ -14,15 +14,15 @@ checkboxes in the same PR that completes the stage.
 
 ## Stage 1 — engine core
 
-- [ ] `openclip probe` returns ffprobe-derived MediaInfo on a synthetic file
-- [ ] `openclip synth` generates a synthetic bilingual lesson (video+audio) usable by all later stages
-- [ ] Script alignment works with mock ASR (unit) and, when the `asr` extra is installed, with faster-whisper (integration, skippable in CI)
-- [ ] Cut planner produces silenced/filler/off-script cuts with reasons; unit tests cover each decision type
-- [ ] Caption generation produces valid ASS (libass/ffmpeg parses it); bilingual styles present; animation tags present
-- [ ] Audio enhancement chain applies without error on synthetic audio
-- [ ] End-to-end: synthetic lesson → script+cutplan → render → ffprobe asserts: h264/aac streams, yuv420p, duration ≈ planned kept-duration (±2 video frames + 0.25 s)
-- [ ] All tests green locally; ruff clean
-- [ ] PR opened from `feature/engine-core`
+- [x] `openclip probe` returns ffprobe-derived MediaInfo on a synthetic file
+- [x] `openclip synth` generates a synthetic bilingual lesson (video+audio) usable by all later stages
+- [x] Script alignment works with mock ASR (unit) and, when the `asr` extra is installed, with faster-whisper (integration, skippable in CI)
+- [x] Cut planner produces silenced/filler/off-script cuts with reasons; unit tests cover each decision type
+- [x] Caption generation produces valid ASS (libass/ffmpeg parses it); bilingual styles present; animation tags present
+- [x] Audio enhancement chain applies without error on synthetic audio
+- [x] End-to-end: synthetic lesson → script+cutplan → render → ffprobe asserts: h264/aac streams, yuv420p, duration ≈ planned kept-duration (±2 video frames + 0.25 s)
+- [x] All tests green locally; ruff clean; mypy --strict clean
+- [ ] PR opened from `feature/engine-core` → merged by owner
 
 ## Stage 2 — desktop app
 
