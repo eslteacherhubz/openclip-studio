@@ -93,6 +93,17 @@ artifact `OpenClipStudio-windows-x64`):
   does not spend), so Windows SmartScreen will show an "unrecognized app"
   warning: choose *More info → Run anyway*.
 
+## Documentation map
+
+- [docs/ROADMAP.md](docs/ROADMAP.md) — the bounded 72-hour plan
+- [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md) — per-stage acceptance criteria + dependency license ledger
+- [docs/CHECKPOINT.md](docs/CHECKPOINT.md) — exact progress state (start here when resuming work)
+- [docs/EYE_CONTACT_RESEARCH.md](docs/EYE_CONTACT_RESEARCH.md) — gaze-correction experiments, numbers, limits
+- [docs/PRODUCTION_GAP_ASSESSMENT.md](docs/PRODUCTION_GAP_ASSESSMENT.md) — implemented / partial / missing vs the production requirements
+- [docs/PRODUCTION_DIRECTOR.md](docs/PRODUCTION_DIRECTOR.md) — architecture for automated, reviewable editing decisions
+- [docs/OWNER_VALIDATION.md](docs/OWNER_VALIDATION.md) — what to run on the real Windows machine
+- [docs/research/EDITOR_VERIFICATION.md](docs/research/EDITOR_VERIFICATION.md) — why we build focused instead of forking Shotcut/Kdenlive
+
 ## License
 
 GPL-3.0-or-later. See [LICENSE](LICENSE). We rely on and recommend these

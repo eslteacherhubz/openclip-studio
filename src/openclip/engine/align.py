@@ -81,7 +81,9 @@ class WhisperTranscriber:
                 "The 'asr' extra is not installed. Run: pip install eterna-openclip-studio[asr]"
             ) from exc
         try:
-            model = WhisperModel(self.model_size, device=self.device, compute_type=self.compute_type)
+            model = WhisperModel(
+                self.model_size, device=self.device, compute_type=self.compute_type
+            )
         except Exception as exc:
             raise RuntimeError(
                 f"Could not load the local whisper model {self.model_size!r}. "

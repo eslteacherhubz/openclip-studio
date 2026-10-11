@@ -52,10 +52,18 @@ checkboxes in the same PR that completes the stage.
 
 ## Stage 5 — hardening + handoff
 
-- [ ] README user quickstart (GUI + CLI) with screenshots or a 5-step path
-- [ ] CHECKPOINT.md reflects final state and exact next steps for the owner
-- [ ] Owner validation checklist: what to install, run, and report on the real target machine
-- [ ] If all gates pass: tag `v0.1.0-rc1` (still not a production-readiness claim)
+- [x] README user quickstart (GUI + CLI) with a 5-step path (screenshots deferred: no display in dev sandbox)
+- [x] CHECKPOINT.md reflects final state and exact next steps for the owner
+- [x] Owner validation checklist: what to install, run, and report on the real target machine (docs/OWNER_VALIDATION.md)
+- [ ] If all gates pass: tag `v0.1.0-rc1` (still not a production-readiness claim) — reserved for the owner after real-machine validation
+
+## Correction pass 1 — caption mapping, packaging truth, production gap plan
+
+- [x] `map_span` fixed for interior cuts (caption 0–10s with cut 3–6s → 0–7s); regression suite `tests/test_caption_mapping.py` (23 cases: multiple cuts, boundary overlaps, fully-removed spans, unsorted input, duration/monotonicity invariants)
+- [x] Windows package audited: whisper + gaze were **absent** from the artifact (packaging env lacked the extras); now bundled (`[gui,asr,gaze]`) with package data (silero VAD ONNX, Haar cascades) and verified inside the frozen app: whisper align with first-use model download, gaze-analyze, full synth→edit→export→probe pipeline, ffprobe-less probing, GUI launch — all on Linux locally; asserted by the expanded Windows packaging job in CI
+- [x] Production gap assessment delivered (docs/PRODUCTION_GAP_ASSESSMENT.md): precise implemented/partial/missing per owner requirement
+- [x] Production Director architecture + v1 skeleton (docs/PRODUCTION_DIRECTOR.md, `src/openclip/director/`): deterministic EDL planner, typed inspectable decisions, review gating, meaning-preservation invariants, executor with explicit unimplemented kinds; 15 tests
+- [ ] PR opened from `correction/caption-mapping-and-packaging` → merged by owner
 
 ## Dependency ledger
 

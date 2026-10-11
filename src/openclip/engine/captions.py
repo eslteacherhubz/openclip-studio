@@ -65,7 +65,7 @@ class CaptionStyle:
         )
 
 
-def _ts(seconds: float) -> str:
+def format_ass_time(seconds: float) -> str:
     """Format seconds as ASS timestamp H:MM:SS.cc (centisecond precision)."""
     cs = round(max(0.0, seconds) * 100.0)
     h, rem = divmod(cs, 360000)
@@ -146,7 +146,7 @@ def build_ass(
         line = by_index.get(idx)
         if line is None or line.confidence <= 0.0 or line.end_s <= line.start_s:
             continue
-        start, end = _ts(line.start_s), _ts(line.end_s + 0.05)
+        start, end = format_ass_time(line.start_s), format_ass_time(line.end_s + 0.05)
         primary_text = str(entry.get("primary", ""))
         support_text = str(entry.get("support", ""))
         if style.karaoke:
