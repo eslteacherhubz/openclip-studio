@@ -74,13 +74,21 @@ installed, else silence-only cuts) → review proposed cuts (uncheck to keep)
 
 ## Windows desktop app
 
-CI builds a self-contained Windows package on every push (see the Actions
-"package-windows" job → artifact `OpenClipStudio-windows-x64`):
+CI builds a Windows package on every push (Actions → "package-windows" job →
+artifact `OpenClipStudio-windows-x64`):
 
 - Unzip, then run `OpenClipStudio\OpenClipStudio.exe` (GUI) or
   `OpenClipStudio\OpenClipCLI.exe` (headless CLI for automation).
-- FFmpeg is bundled (via the imageio-ffmpeg wheel) — no separate install
-  needed for editing/export.
+- **Bundled and verified by automated Windows CI**: the editing engine
+  (probing, cuts, captions, audio enhancement, MP4 export — FFmpeg binary is
+  included, no separate install), the GUI shell, the gaze-correction
+  libraries (OpenCV + cascade data), and the whisper transcription runtime
+  (faster-whisper + ctranslate2). Each of these is exercised inside the
+  frozen app by the packaging smoke tests before an artifact is produced.
+- **First-launch download (the only internet step)**: the first whisper run
+  downloads the selected model once (e.g. ~75 MB for `tiny`) to your user
+  cache; transcription afterwards is fully offline. No other feature needs
+  network, ever.
 - The build is **not code-signed** (signing costs money, which this project
   does not spend), so Windows SmartScreen will show an "unrecognized app"
   warning: choose *More info → Run anyway*.

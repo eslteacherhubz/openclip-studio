@@ -46,6 +46,7 @@ checkboxes in the same PR that completes the stage.
 - [x] Actions on push/PR: ruff, mypy (strict on src/, enforced from this stage), pytest — ubuntu (3.11+3.12) + windows (3.11+3.12) matrix
 - [x] Headless E2E job (synthetic → render → ffprobe asserts) runs in CI on both OSes with no network beyond pip install (ASR/gaze/gui extras auto-skip or install via extras; no model downloads in CI)
 - [x] `windows-latest` job builds a PyInstaller one-folder artifact (GUI + headless CLI, bundled ffmpeg from imageio-ffmpeg) + SHA-256 checksum, uploaded to the run (spec mechanics validated on Linux in the sandbox; the Windows job produces the real artifact)
+- [x] Correction pass: the frozen bundle now **contains and is smoke-verified** for whisper (faster-whisper + ctranslate2 + VAD asset + first-use model download) and gaze (opencv + cascade data) — validated in the frozen app on Linux and asserted by the Windows packaging job (export E2E, gaze smoke, SAPI-speech whisper align, GUI alive-check). Previously these extras were missing from the artifact; the "self-contained" claim now covers exactly what is verified.
 - [x] Dependency ledger (below) complete and license-checked
 - [ ] PR opened from `feature/ci-packaging` → merged by owner (CI green on the branch before handoff)
 
