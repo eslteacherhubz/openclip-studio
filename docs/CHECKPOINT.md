@@ -28,7 +28,7 @@ Last updated: 2026-10-11 — Correction pass 1 complete on branch `correction/ca
 | 3 Eye-contact research (rig, detector, warp, eval harness) | PR #3 `feature/eye-contact` | green CI, awaiting owner |
 | 4 CI matrix + Windows packaging | PR #4 `feature/ci-packaging` | green CI (9/9 jobs; Windows artifact built, zip + sha256) |
 | 5 Hardening + handoff | PR #5 `feature/hardening` | green CI (9/9 jobs) |
-| **Correction 1** | `correction/caption-mapping-and-packaging` | this pass — see below |
+| **Correction 1** | PR #6 `correction/caption-mapping-and-packaging` | green CI (9/9 jobs, run 38168146643) — see below |
 
 ### Correction pass 1 (this branch)
 
@@ -70,8 +70,11 @@ Test suite now 70 tests; mypy --strict clean (28 files); ruff clean.
 
 ## In flight
 
-- PR from `correction/caption-mapping-and-packaging` (CI dispatched; the
-  Windows packaging job grows by ~2–4 min for the new extras + smoke tests).
+- Nothing in flight. PR #6 (`correction/caption-mapping-and-packaging`) is
+  fully green: CI run 38168146643, 9/9 jobs, including the expanded Windows
+  packaging battery (frozen export E2E "10.3s h264/aac", frozen gaze smoke,
+  frozen whisper align 3/3 lines conf 1.00 via SAPI speech + first-use model
+  download, GUI alive-check) and the artifact upload.
 
 ## Blocked
 
