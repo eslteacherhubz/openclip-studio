@@ -61,27 +61,31 @@ def map_span(
 ) -> tuple[float, float] | None:
     """Map a [start, end] span from source to exported timeline.
 
-    Returns None when the span is entirely inside a cut.
+    Each endpoint is shifted by the total duration of accepted cuts that lie
+    before it, so a cut *inside* the span compresses it (caption 0–10s with a
+    removed 3–6s interval maps to 0–7s). Spans fully inside a cut (or clipped
+    to nothing) return None. Overlapping/unsorted cut lists are normalized.
     """
+    if end_s <= start_s:
+        return None
+    cuts = sorted(cut_spans)
     s, e = start_s, end_s
-    for cs, ce in cut_spans:
-        if ce <= s:
-            continue
-        if cs >= e:
-            break
+    for cs, ce in cuts:
+        if ce <= s or cs >= e:
+            continue  # cut entirely outside the span
         if cs <= s and ce >= e:
-            return None
+            return None  # span fully inside this cut
         if cs <= s < ce:
-            s = ce
-        if cs < e <= ce:
-            e = cs
-        if e <= s:
+            s = ce  # span starts inside the cut: resume at the cut's end
+        elif cs < e <= ce:
+            e = cs  # span ends inside the cut: stop at the cut's start
+        if e - s <= 1e-9:
             return None
-    offset_before = sum(ce - cs for cs, ce in cut_spans if ce <= s)
-    offset_inside = sum(
-        min(ce, s) - cs for cs, ce in cut_spans if cs < s < ce
-    )
-    return s - offset_before - offset_inside, e - offset_before - offset_inside
+
+    def removed_before(t: float) -> float:
+        return sum(ce - cs for cs, ce in cuts if ce <= t)
+
+    return s - removed_before(s), e - removed_before(e)
 
 
 def map_alignment(alignment: Alignment, cut_spans: list[tuple[float, float]]) -> Alignment:
