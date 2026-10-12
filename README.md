@@ -56,8 +56,21 @@ Requires Python 3.11+. FFmpeg/ffprobe are located from `PATH` or bundled via
 ```bash
 openclip probe lesson.mp4            # inspect media
 openclip synth --out demo.mp4        # generate synthetic demo lesson (for testing)
-openclip render project.json -o out.mp4
+openclip new --media lesson.mp4 --script script.txt -o project.json
+openclip auto project.json -o out.mp4   # one-shot: align + plan + render
 ```
+
+Desktop app (Windows/Linux; needs the `gui` extra):
+
+```bash
+pip install ".[gui]"
+openclip-gui         # or: openclip gui
+```
+
+Workflow: **New project** → pick your recording → paste the bilingual
+script (`English :: 支持语言` blocks) → **Analyze** (local whisper if
+installed, else silence-only cuts) → review proposed cuts (uncheck to keep)
+→ tune captions/audio settings → **Export MP4**.
 
 ## License
 
