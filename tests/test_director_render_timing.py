@@ -19,8 +19,8 @@ overlapping -> merged [5,8], C3=[9,9.5]; removed total 5 s -> export 7 s):
   F         (9.6, 10.0)   (4.6, 5.0)    after all cuts       4.8 -> orange
 
 Anti-regression sentinels (a source-timestamp bug would show orange where
-the correct render has none): 3.8 (raw A window 3-4), 6.4 (raw B window),
-6.9 (past everything; export is 7 s).
+the correct render has none): 3.8 (raw A window 3-4), 5.2 (raw E solid until
+its fade-out; correct F has faded by 5.05), 6.4 (raw B window).
 """
 
 from __future__ import annotations
@@ -99,6 +99,8 @@ def _frame_rgb_rows(bmp_path: Path) -> list[list[tuple[int, int, int]]]:
 
 def _callout_pixels(media: Path, t: float, tmp: Path) -> int:
     bmp = tmp / f"frame_{t:.2f}.bmp"
+    if bmp.exists():
+        bmp.unlink()
     subprocess.run(
         [
             ffmpeg_exe(),
@@ -119,6 +121,10 @@ def _callout_pixels(media: Path, t: float, tmp: Path) -> int:
         timeout=120,
         capture_output=True,
     )
+    if not bmp.exists():
+        raise AssertionError(
+            f"no frame at t={t}s in {media} (seek past end of file?)"
+        )
     cr, cg, cb = CALLOUT_RGB
     count = 0
     for row in _frame_rgb_rows(bmp):
@@ -201,8 +207,8 @@ def test_export_duration_reflects_normalized_cuts(timed_export: tuple[Path, Path
         (3.2, True),    # E: ends inside C2, clipped -> (3.0,3.5)
         (4.8, True),    # F: after all cuts -> (4.6,5.0)
         (3.8, False),   # sentinel: raw-A window (3-4) must be empty
+        (5.2, False),   # sentinel: raw-E solid window; correct-F already faded
         (6.4, False),   # sentinel: B fully inside merged cut; raw window empty
-        (6.9, False),   # nothing near the export tail
     ],
 )
 def test_overlay_timing_in_exported_mp4(
