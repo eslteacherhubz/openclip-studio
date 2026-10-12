@@ -182,6 +182,46 @@ def _cmd_gui(args: argparse.Namespace) -> int:
     return gui_main(args.argv)
 
 
+def _require_gaze() -> bool:
+    from openclip.gaze import available
+
+    if not available():
+        print(
+            "Gaze tools need the 'gaze' extra: pip install eterna-openclip-studio[gaze]",
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
+def _cmd_gaze_analyze(args: argparse.Namespace) -> int:
+    if not _require_gaze():
+        return 2
+    from openclip.gaze.apply import analyze_to_json
+
+    print(analyze_to_json(args.media, max_frames=args.max_frames))
+    return 0
+
+
+def _cmd_gaze_apply(args: argparse.Namespace) -> int:
+    if not _require_gaze():
+        return 2
+    from openclip.gaze.apply import apply_to_video
+    from openclip.gaze.evaluate import render_report, run_all
+
+    stats = apply_to_video(
+        args.media,
+        args.out,
+        strength=args.strength,
+        max_frames=args.max_frames,
+        mode=args.mode,
+    )
+    print(f"Corrected video: {args.out}")
+    print(f"Frames: {stats.frames} (eyes detected in {stats.frames_with_eyes})")
+    print(render_report(run_all(strength=args.strength)))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="openclip",
@@ -246,6 +286,23 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("gui", help="launch the desktop app (needs the 'gui' extra)")
     sp.add_argument("argv", nargs="*", help="arguments passed to Qt")
     sp.set_defaults(func=_cmd_gui)
+
+    sp = sub.add_parser(
+        "gaze-analyze", help="report detected gaze offsets (research; 'gaze' extra)"
+    )
+    sp.add_argument("media")
+    sp.add_argument("--max-frames", type=int, default=None)
+    sp.set_defaults(func=_cmd_gaze_analyze)
+
+    sp = sub.add_parser(
+        "gaze-apply", help="write a gaze-corrected copy (research; 'gaze' extra)"
+    )
+    sp.add_argument("media")
+    sp.add_argument("-o", "--out", required=True)
+    sp.add_argument("--strength", type=float, default=0.8)
+    sp.add_argument("--max-frames", type=int, default=None)
+    sp.add_argument("--mode", choices=["frame", "patch"], default="frame")
+    sp.set_defaults(func=_cmd_gaze_apply)
 
     return p
 
