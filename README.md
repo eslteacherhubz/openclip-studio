@@ -72,6 +72,19 @@ script (`English :: 支持语言` blocks) → **Analyze** (local whisper if
 installed, else silence-only cuts) → review proposed cuts (uncheck to keep)
 → tune captions/audio settings → **Export MP4**.
 
+## Windows desktop app
+
+CI builds a self-contained Windows package on every push (see the Actions
+"package-windows" job → artifact `OpenClipStudio-windows-x64`):
+
+- Unzip, then run `OpenClipStudio\OpenClipStudio.exe` (GUI) or
+  `OpenClipStudio\OpenClipCLI.exe` (headless CLI for automation).
+- FFmpeg is bundled (via the imageio-ffmpeg wheel) — no separate install
+  needed for editing/export.
+- The build is **not code-signed** (signing costs money, which this project
+  does not spend), so Windows SmartScreen will show an "unrecognized app"
+  warning: choose *More info → Run anyway*.
+
 ## License
 
 GPL-3.0-or-later. See [LICENSE](LICENSE). We rely on and recommend these

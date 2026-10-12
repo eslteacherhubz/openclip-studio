@@ -43,11 +43,11 @@ checkboxes in the same PR that completes the stage.
 
 ## Stage 4 — CI + packaging
 
-- [ ] Actions on push/PR: ruff, mypy (strict on src/, enforced from this stage), pytest — ubuntu + windows matrix, Python 3.11 + 3.12
-- [ ] Headless E2E job (synthetic → render → ffprobe asserts) runs in CI with no network beyond pip install
-- [ ] `windows-latest` job builds a PyInstaller one-folder artifact + SHA-256 checksum, uploaded to the run
-- [ ] Dependency ledger (below) complete and license-checked
-- [ ] PR opened from `feature/ci-packaging`
+- [x] Actions on push/PR: ruff, mypy (strict on src/, enforced from this stage), pytest — ubuntu (3.11+3.12) + windows (3.11+3.12) matrix
+- [x] Headless E2E job (synthetic → render → ffprobe asserts) runs in CI on both OSes with no network beyond pip install (ASR/gaze/gui extras auto-skip or install via extras; no model downloads in CI)
+- [x] `windows-latest` job builds a PyInstaller one-folder artifact (GUI + headless CLI, bundled ffmpeg from imageio-ffmpeg) + SHA-256 checksum, uploaded to the run (spec mechanics validated on Linux in the sandbox; the Windows job produces the real artifact)
+- [x] Dependency ledger (below) complete and license-checked
+- [ ] PR opened from `feature/ci-packaging` → merged by owner (CI green on the branch before handoff)
 
 ## Stage 5 — hardening + handoff
 
@@ -72,7 +72,7 @@ Every runtime/test dependency, license, and where it is used. Keep in sync with 
 | pytest | >=8 | MIT | tests | dev |
 | ruff | >=0.4 | MIT | lint | dev |
 | mypy | >=1.10 | MIT | types | dev |
-| pyinstaller | >=6.0 | GPL-2.0 (bootloader exception) | Windows packaging | dev; used as a build tool, output not restricted by it |
+| pyinstaller | >=6.0 | GPL-2.0 (bootloader exception) | Windows packaging | dev/build tool; used as documented in Stage 4 CI |
 
 All licenses GPL-3-compatible. FFmpeg is invoked as a subprocess (not linked),
 so FFmpeg's GPL/LGPL status does not restrict this codebase.
