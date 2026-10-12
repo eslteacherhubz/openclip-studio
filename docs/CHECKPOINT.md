@@ -1,6 +1,6 @@
 # CHECKPOINT — exact, resumable progress state
 
-Last updated: 2026-10-11 — Correction pass 2 (PR #6 final correction) complete; final CI verification of the exact head SHA in progress.
+Last updated: 2026-10-12 — Correction pass 2 (PR #6 final correction) complete and CI-verified.
 
 ## Correction pass 2 (this branch, on top of correction pass 1)
 
@@ -14,8 +14,8 @@ Three corrections per the review assignment, all regression-tested:
    BMP dumps parsed with stdlib) for the callout colour: before cuts,
    clipped at cut start, between cuts, clipped at cut end, after all cuts,
    fully removed, plus raw-timestamp sentinel frames that must stay empty.
-   Negative control verified: with raw spans the sentinels show 289/285
-   px (bug detected); with the fix <10 px.
+   Negative control verified: with raw spans the sentinels show 289/320/285
+   px (bug detected at 3.8 s, 5.2 s, 6.4 s); with the fix <10 px.
 2. **Review enforcement** — captions now render ONLY for accepted
    `caption` decisions (the old path burned captions from project state,
    ignoring the EDL); pending decisions never render even with
@@ -34,9 +34,24 @@ Three corrections per the review assignment, all regression-tested:
    inside a 0–10 s caption → 4 s output interval. Kept-interval complement
    and `map_span` cross-checked for agreement.
 
-Suite: 103 tests green (10 new normalization/mapping, 12 new director
-review+timing, 9 pixel render-regression, plus all previous); mypy --strict
-clean (28 files); ruff clean.
+## Verification record (correction pass 2)
+
+- Local (dev sandbox): 103 passed, ruff clean, `mypy --strict` clean
+  (28 files). ASR integration tests run locally (faster-whisper +
+  espeak-ng installed).
+- CI, code-complete SHA `519022f`, run 38198487097: **9/9 jobs green** —
+  lint, mypy, test (3.11: 90 passed/13 skipped), test (3.12), gui (offscreen
+  PySide6), gaze (rig experiments), test-windows (3.11 + 3.12 — the pixel
+  overlay-timing regression runs on real Windows with libass), and
+  package-windows (frozen artifact + smoke battery).
+- This checkpoint commit is docs-only; the final head SHA gets its own
+  dispatched green run recorded below.
+
+## Final SHA verification
+
+- HEAD at publication of this checkpoint: see `git log -1` — the dispatched
+  CI run for this exact SHA must be green before the work is called
+  complete (recorded here once finished).
 
 ## Environment (dev sandbox where this work ran)
 
