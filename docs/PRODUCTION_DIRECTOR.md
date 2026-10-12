@@ -117,15 +117,32 @@ degradation.
   JSON round-trip, determinism (stable ordering + no timestamps), and the
   invariant checks above.
 - `director/planner.py` — `RuleBasedPlanner`: script markers + existing
-  alignment/cut plan → EDL. Pure function of project state.
+  alignment/cut plan → EDL. Pure function of project state. Markers are
+  detected by the engine (`engine/script.py`) and skipped by the aligner, so
+  they never consume ASR words; each attaches to the next aligned spoken line.
 - `director/executor.py` — executes accepted `cut`/`caption`/`callout`/
-  `section_title` decisions through the engine renderer (captions + overlay
-  events composed into one ASS document); refuses unimplemented kinds
-  explicitly.
-- `tests/test_director.py` — determinism, round-trip, meaning-preservation,
-  review gating, end-to-end mini-render with a callout burned in.
-- `engine/render.py` gained a public `build_export_ass`/`render_export` path
-  (behaviour-preserving refactor; all previous render tests still green).
+  `section_title` decisions through the engine renderer:
+  - every overlay span is mapped through `map_span` against the normalized
+    accepted cuts, so overlays land at **export-timeline** timestamps;
+    overlays fully inside cuts are dropped;
+  - captions render only for **accepted** `caption` decisions, and only
+    when `RenderOptions.burn_captions` is set (callouts/titles are governed
+    by their own decision status);
+  - unimplemented kinds (diagram_slot, color_preset, reframe, background,
+    emphasis) fail with an explicit `NotImplementedError` — no silent
+    degradation.
+- `engine/render.py` — public `normalize_cut_spans` (merge overlaps/
+  duplicates/adjacency) used by `map_span`, `render_project`, and the
+  executor, so caption/overlay mapping and the cut renderer share one
+  normalized timeline; public `build_export_ass`/`render_export` path.
+- `engine/captions.py` — split into `build_ass_header` (+extra styles) and
+  `caption_events` so the director composes valid ASS documents (including
+  overlay-only documents) without duplicating style logic.
+- Tests: determinism, round-trip, meaning-preservation, review gating
+  (accepted/rejected/pending/mixed), export-timeline mapping (ASS timestamps),
+  and a **pixel-verified video-render regression** that probes exported
+  frames for overlays placed before/during/after cuts plus a fully removed
+  overlay and raw-timestamp sentinels (negative-controlled against the bug).
 
 ## 8. Next slices (in recommended order)
 

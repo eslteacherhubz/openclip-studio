@@ -5,6 +5,14 @@ plus the two new ASS-overlay compositions (callout, section_title). Kinds
 whose engine primitives do not exist yet (diagram_slot, color_preset,
 reframe, background, emphasis) fail with an explicit NotImplementedError —
 never a silent fallback.
+
+Timeline contract: every visual decision carries a *source-timeline* span.
+Before rendering, spans are mapped through ``map_span`` against the
+normalized accepted cuts, so overlays land at export-timeline timestamps
+(and overlays fully inside cuts are dropped). Captions render only for
+``caption`` decisions the reviewer accepted, and only when
+``RenderOptions.burn_captions`` is set (callouts/titles are governed by
+their own decision status, not by burn_captions).
 """
 
 from __future__ import annotations
@@ -12,7 +20,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from openclip.director.models import Decision, EditDecisionList, check_invariants
-from openclip.engine.captions import format_ass_time
+from openclip.engine.align import Alignment, alignment_from_dict
+from openclip.engine.captions import (
+    build_ass_header,
+    caption_events,
+    format_ass_time,
+)
 from openclip.engine.enhance import build_audio_filter
 from openclip.engine.ffmpeg import MediaInfo
 from openclip.engine.project import Project
@@ -20,7 +33,8 @@ from openclip.engine.render import (
     ProgressFn,
     RenderOptions,
     RenderResult,
-    build_export_ass,
+    map_span,
+    normalize_cut_spans,
     render_export,
 )
 
@@ -28,13 +42,23 @@ _UNSUPPORTED = ("diagram_slot", "color_preset", "reframe", "background", "emphas
 
 _SAFE_MARGIN_V = 140  # callout/title band: below the caption block
 
+# ASS PrimaryColour &HAABBGGRR: alpha 00, blue 0x10, green 0xF0, red 0xFF.
+CALLOUT_RGB = (255, 240, 16)
+_CALLOUT_STYLE = (
+    "Style: Callout,Arial,22,&H0010F0FF,&H000000FF,&H00101010,&H80000000,"
+    "0,0,0,0,100,100,0,0,1,2,1,2,40,40,0,1"
+)
 
-def callout_event(decision: Decision, res_y: int) -> str:
-    """Deterministic ASS event for a callout/section-title decision."""
-    assert decision.source_span is not None
+
+def callout_event(decision: Decision, export_span: tuple[float, float]) -> str:
+    """Deterministic ASS event for a callout/section-title decision.
+
+    `export_span` must already be in export-timeline time (mapped through
+    ``map_span`` against the accepted cuts).
+    """
     start, end = (
-        format_ass_time(decision.source_span[0]),
-        format_ass_time(decision.source_span[1] + 0.05),
+        format_ass_time(export_span[0]),
+        format_ass_time(export_span[1] + 0.05),
     )
     if decision.kind == "section_title":
         text = str(decision.params.get("title", ""))
@@ -50,35 +74,88 @@ def callout_event(decision: Decision, res_y: int) -> str:
     )
 
 
+def _accepted_caption_lines(
+    project: Project,
+    caption_decisions: list[Decision],
+) -> tuple[list[dict[str, object]], Alignment]:
+    """Script entries + alignment restricted to accepted caption decisions."""
+    if project.alignment is None:
+        return [], Alignment(lines=[], transcriber="none")
+    alignment = alignment_from_dict(project.alignment)
+    by_line = {ln.index: ln for ln in alignment.lines}
+    script_by_index = {ln.index: ln for ln in project.script.lines}
+    selected: list[int] = []
+    for d in caption_decisions:
+        if d.source_line is None:
+            continue
+        if d.source_line in by_line and d.source_line in script_by_index:
+            selected.append(d.source_line)
+    script_entries: list[dict[str, object]] = [
+        {
+            "index": i,
+            "primary": script_by_index[i].primary,
+            "support": script_by_index[i].support,
+        }
+        for i in selected
+    ]
+    selected_alignment = Alignment(
+        lines=[by_line[i] for i in selected], transcriber=alignment.transcriber
+    )
+    return script_entries, selected_alignment
+
+
 def compose_ass(
     project: Project,
     media: MediaInfo,
     cut_spans: list[tuple[float, float]],
     edl: EditDecisionList,
+    burn_captions: bool = True,
 ) -> str | None:
-    """Captions (existing system) + accepted overlay decisions in one ASS."""
-    base = build_export_ass(project, media, cut_spans)
-    overlays = [
+    """Compose the export-timeline ASS document for accepted decisions.
+
+    - caption decisions render only when accepted (review) AND
+      ``burn_captions`` is set;
+    - callout/section_title decisions render only when accepted, at
+      export-timeline times mapped through the accepted cuts; overlays fully
+      inside a cut are dropped;
+    - returns None when nothing renders (fast path: no video re-encode).
+    """
+    cuts = normalize_cut_spans(cut_spans)
+    accepted = edl.accepted()
+    caption_decisions = [d for d in accepted if d.kind == "caption"]
+    overlay_decisions = [
         d
-        for d in edl.accepted()
+        for d in accepted
         if d.kind in ("callout", "section_title") and d.source_span is not None
     ]
-    if base is None and not overlays:
+    if not caption_decisions and not overlay_decisions:
         return None
-    lines = (base or "").rstrip("\n").splitlines()
-    if not any(line.startswith("Style: Callout") for line in lines):
-        insert_at = next(
-            (i for i, line in enumerate(lines) if line.startswith("[Events]")),
-            len(lines),
-        )
-        callout_style = (
-            "Style: Callout,Arial,22,&H0010F0FF,&H000000FF,&H00101010,&H80000000,"
-            "0,0,0,0,100,100,0,0,1,2,1,2,40,40,0,1"
-        )
-        lines.insert(insert_at, callout_style)
+
+    res_x = media.width or 1280
     res_y = media.height or 720
-    tail = [callout_event(d, res_y) for d in overlays]
-    return "\n".join(lines + tail) + "\n"
+    events: list[str] = []
+
+    if burn_captions and caption_decisions:
+        script_entries, selected = _accepted_caption_lines(project, caption_decisions)
+        if selected.lines:
+            from openclip.engine.render import map_alignment
+
+            mapped = map_alignment(selected, cuts)
+            events.extend(
+                caption_events(script_entries, mapped, res_x, res_y, project.captions)
+            )
+
+    for d in overlay_decisions:
+        assert d.source_span is not None
+        export_span = map_span(d.source_span[0], d.source_span[1], cuts)
+        if export_span is None:
+            continue  # overlay fully removed by cuts
+        events.append(callout_event(d, export_span))
+
+    if not events:
+        return None
+    header = build_ass_header(res_x, res_y, project.captions, (_CALLOUT_STYLE,))
+    return "\n".join([header, *events]) + "\n"
 
 
 def render_edl(
@@ -114,17 +191,21 @@ def render_edl(
         )
 
     opts = options or RenderOptions()
-    cut_spans = sorted(
-        (d.source_span[0], d.source_span[1])
-        for d in accepted
-        if d.kind == "cut" and d.source_span is not None
+    cut_spans = normalize_cut_spans(
+        [
+            (d.source_span[0], d.source_span[1])
+            for d in accepted
+            if d.kind == "cut" and d.source_span is not None
+        ]
     )
     kept = kept_intervals_from_spans(cut_spans, media.duration_s)
 
     audio_preset = opts.audio_preset or project.audio_preset
     audio_chain = build_audio_filter(audio_preset) if media.has_audio else None
 
-    ass_text = compose_ass(project, media, cut_spans, edl)
+    ass_text = compose_ass(
+        project, media, cut_spans, edl, burn_captions=opts.burn_captions
+    )
     return render_export(
         media=media,
         kept=kept,
@@ -140,12 +221,13 @@ def render_edl(
 def kept_intervals_from_spans(
     cut_spans: list[tuple[float, float]], duration_s: float
 ) -> list[tuple[float, float]]:
-    """Complement of the cut spans over [0, duration] (same math as the engine)."""
+    """Complement of the (normalized) cut spans over [0, duration]."""
     from openclip.engine.cutplan import CutDecision
     from openclip.engine.cutplan import kept_intervals as engine_kept
 
+    normalized = normalize_cut_spans(cut_spans)
     fake = [
         CutDecision(kind="silence", start_s=s, end_s=e, reason="", confidence=1.0)
-        for s, e in cut_spans
+        for s, e in normalized
     ]
     return engine_kept(fake, duration_s)

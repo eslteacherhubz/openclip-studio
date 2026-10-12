@@ -163,6 +163,159 @@ class TestReviewGating:
             render_edl(project, media, edl, tmp_path / "out.mp4")
 
 
+class TestReviewEnforcement:
+    """Rejected/pending captions must not render; burn_captions honored."""
+
+    def _edl_with_caption_statuses(
+        self, project: Project, statuses: dict[str, str]
+    ) -> EditDecisionList:
+        edl = plan_from_project(project)
+        for d in edl.decisions:
+            d.status = statuses.get(d.id, d.status)
+        return edl
+
+    def test_rejected_caption_excluded_from_ass(self, lesson: Path) -> None:
+        project = _project_with_markers(lesson)
+        edl = self._edl_with_caption_statuses(
+            project, {"caption-001": "rejected"}
+        )
+        for d in edl.decisions:
+            if d.status == "pending":
+                d.status = "accepted" if d.kind != "diagram_slot" else "rejected"
+        text = compose_ass(project, probe(lesson), [], edl)
+        assert text is not None
+        assert "Hello everyone" not in text, "rejected caption leaked into the ASS"
+        assert "Today we will learn" in text, "accepted caption missing"
+
+    def test_pending_caption_not_rendered_even_without_review_gate(
+        self, lesson: Path
+    ) -> None:
+        project = _project_with_markers(lesson)
+        edl = self._edl_with_caption_statuses(
+            project, {"caption-001": "pending", "caption-005": "accepted"}
+        )
+        for d in edl.decisions:
+            if d.status == "pending" and d.id != "caption-001":
+                d.status = "accepted" if d.kind != "diagram_slot" else "rejected"
+        text = compose_ass(project, probe(lesson), [], edl)
+        assert text is not None
+        assert "Hello everyone" not in text, "pending caption rendered"
+        assert "Today we will learn" in text
+
+    def test_burn_captions_false_suppresses_captions_only(self, lesson: Path) -> None:
+        project = _project_with_markers(lesson)
+        edl = self._edl_with_caption_statuses(project, {})
+        for d in edl.decisions:
+            d.status = "accepted" if d.kind != "diagram_slot" else "rejected"
+        media = probe(lesson)
+        text = compose_ass(project, media, [], edl, burn_captions=False)
+        assert text is not None
+        assert ",Primary,," not in text, "caption event rendered with burn_captions=False"
+        assert ",Support,," not in text
+        assert ",Callout,," in text, "callout must survive burn_captions=False"
+
+    def test_burn_captions_false_without_overlays_skips_video_pass(
+        self, lesson: Path
+    ) -> None:
+        project = _project_with_markers(lesson)
+        edl = self._edl_with_caption_statuses(project, {})
+        for d in edl.decisions:
+            if d.kind == "caption":
+                d.status = "accepted"
+        text = compose_ass(project, probe(lesson), [], edl, burn_captions=False)
+        assert text is None
+
+    def test_mixed_states_render_only_accepted(
+        self, lesson: Path, tmp_path: Path
+    ) -> None:
+        project = _project_with_markers(lesson)
+        edl = self._edl_with_caption_statuses(
+            project, {"caption-001": "rejected", "caption-005": "accepted"}
+        )
+        for d in edl.decisions:
+            if d.status == "pending":
+                d.status = "rejected"
+        media = probe(lesson)
+        out = tmp_path / "mixed.mp4"
+        result = render_edl(project, media, edl, out, require_review=False)
+        assert out.exists()
+        assert result.segments >= 1
+
+
+class TestOverlayTimelineMapping:
+    """Overlays must use export-timeline timestamps after accepted cuts."""
+
+    def _bare_project(self, lesson: Path) -> Project:
+        return Project.create(source=lesson, script_text="")
+
+    def _overlay_edl(self, source: Path, spans: list[tuple[str, float, float]]) -> EditDecisionList:
+        decisions = [
+            Decision(
+                id=f"callout-{i:03d}",
+                kind="callout",
+                source_line=i,
+                source_span=(s, e),
+                params={"term": term},
+                rationale="test overlay",
+                status="accepted",
+            )
+            for i, (term, s, e) in enumerate(spans)
+        ]
+        return EditDecisionList(project_source=str(source), decisions=decisions)
+
+    def test_callout_after_cut_uses_mapped_export_time(self, lesson: Path) -> None:
+        project = self._bare_project(lesson)
+        edl = self._overlay_edl(lesson, [("AFTER_CUT", 5.0, 6.0)])
+        media = probe(lesson)
+        text = compose_ass(project, media, [(1.0, 2.0)], edl)
+        assert text is not None
+        assert "Dialogue: 2,0:00:04.00,0:00:05.05,Callout" in text
+
+    def test_overlay_fully_inside_cut_is_dropped(self, lesson: Path) -> None:
+        project = self._bare_project(lesson)
+        edl = self._overlay_edl(
+            lesson, [("KEPT_ONE", 0.2, 0.8), ("LEAKED_TWO", 1.2, 1.8)]
+        )
+        media = probe(lesson)
+        text = compose_ass(project, media, [(1.0, 2.0)], edl)
+        assert text is not None
+        assert "KEPT_ONE" in text
+        assert "LEAKED_TWO" not in text, "overlay inside a cut must not render"
+
+    def test_overlay_straddling_cut_start_clamps(self, lesson: Path) -> None:
+        project = self._bare_project(lesson)
+        edl = self._overlay_edl(lesson, [("STRADDLE", 0.5, 1.5)])
+        media = probe(lesson)
+        text = compose_ass(project, media, [(1.0, 2.0)], edl)
+        assert text is not None
+        # Clipped to (0.5, 1.0): no cut before 1.0, so export times are raw
+        # (with the +0.05s display tail the executor adds).
+        assert "Dialogue: 2,0:00:00.50,0:00:01.05,Callout" in text
+
+    def test_overlay_after_overlapping_cuts_counts_union_once(
+        self, lesson: Path
+    ) -> None:
+        project = self._bare_project(lesson)
+        edl = self._overlay_edl(lesson, [("UNION_TEST", 10.0, 10.5)])
+        media = probe(lesson)
+        # Overlapping cuts [3,7]+[5,9] = 6 s removed before the overlay.
+        text = compose_ass(project, media, [(3.0, 7.0), (5.0, 9.0)], edl)
+        assert text is not None
+        assert "Dialogue: 2,0:00:04.00,0:00:04.55,Callout" in text
+
+    def test_kept_from_overlapping_accepted_cuts(self, lesson: Path) -> None:
+        from openclip.director.executor import kept_intervals_from_spans
+
+        kept = kept_intervals_from_spans([(3.0, 7.0), (5.0, 9.0)], 12.0)
+        assert sum(e - s for s, e in kept) == 6.0  # 12 - union(6)
+
+    def test_all_overlays_cut_away_returns_none(self, lesson: Path) -> None:
+        project = self._bare_project(lesson)
+        edl = self._overlay_edl(lesson, [("GONE", 3.5, 4.5)])
+        media = probe(lesson)
+        assert compose_ass(project, media, [(3.0, 5.0)], edl) is None
+
+
 class TestExecutor:
     def test_render_edl_end_to_end(self, lesson: Path, tmp_path: Path) -> None:
         project = _project_with_markers(lesson)

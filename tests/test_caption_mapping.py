@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 
 from openclip.engine.align import Alignment, LineAlignment
-from openclip.engine.render import map_alignment, map_span
+from openclip.engine.render import map_alignment, map_span, normalize_cut_spans
 
 EPS = 1e-9
 
@@ -86,15 +86,20 @@ class TestMapSpanInvariants:
             (0.0, 10.0, [(3.0, 6.0), (7.0, 8.0)]),
             (4.0, 8.0, [(3.0, 6.0)]),
             (2.0, 4.0, [(3.0, 6.0)]),
+            (0.0, 10.0, [(3.0, 7.0), (5.0, 9.0)]),
+            (2.0, 12.0, [(3.0, 7.0), (5.0, 9.0)]),
         ]
         for s, e, cuts in cases:
             mapped = map_span(s, e, cuts)
             if mapped is None:
                 continue
             out_s, out_e = mapped
-            visible = e - s - sum(
-                max(0.0, min(e, ce) - max(s, cs)) for cs, ce in cuts
+            removed = sum(
+                min(e, ce) - max(s, cs)
+                for cs, ce in normalize_cut_spans(cuts)
+                if cs < e and ce > s
             )
+            visible = e - s - removed
             assert out_e - out_s == pytest.approx(visible, abs=EPS), (s, e, cuts)
 
     def test_monotonic_nondecreasing_endpoints(self) -> None:
@@ -117,6 +122,74 @@ class TestMapSpanInvariants:
     def test_adjacent_cuts_treated_compactly(self) -> None:
         # Touching cuts (3,5) and (5,6): total removed 3s.
         assert map_span(0.0, 10.0, [(3.0, 5.0), (5.0, 6.0)]) == (0.0, 7.0)
+
+
+class TestNormalizeCutSpans:
+    def test_merges_overlapping(self) -> None:
+        assert normalize_cut_spans([(3.0, 7.0), (5.0, 9.0)]) == [(3.0, 9.0)]
+
+    def test_merges_adjacent(self) -> None:
+        assert normalize_cut_spans([(3.0, 5.0), (5.0, 7.0)]) == [(3.0, 7.0)]
+
+    def test_deduplicates(self) -> None:
+        assert normalize_cut_spans([(3.0, 6.0), (3.0, 6.0)]) == [(3.0, 6.0)]
+
+    def test_sorts_unsorted_input(self) -> None:
+        assert normalize_cut_spans([(7.0, 8.0), (1.0, 2.0), (3.0, 4.0)]) == [
+            (1.0, 2.0),
+            (3.0, 4.0),
+            (7.0, 8.0),
+        ]
+
+    def test_drops_invalid_and_empty(self) -> None:
+        assert normalize_cut_spans([(5.0, 3.0), (2.0, 2.0), (1.0, 2.0)]) == [(1.0, 2.0)]
+        assert normalize_cut_spans([]) == []
+
+    def test_chain_of_overlaps_collapses(self) -> None:
+        assert normalize_cut_spans([(0, 2), (1.5, 4), (3.5, 6), (8, 9)]) == [
+            (0.0, 6.0),
+            (8.0, 9.0),
+        ]
+
+
+class TestMapSpanOverlappingCuts:
+    def test_reported_case_overlapping_cuts_four_second_output(self) -> None:
+        # Cuts [3,7] and [5,9] overlap: union is [3,9] = 6 s removed, so a
+        # 0-10 s caption must map to a 4 s output interval.
+        assert map_span(0.0, 10.0, [(3.0, 7.0), (5.0, 9.0)]) == (0.0, 4.0)
+
+    def test_duplicate_cuts_counted_once(self) -> None:
+        assert map_span(0.0, 10.0, [(3.0, 6.0), (3.0, 6.0)]) == (0.0, 7.0)
+
+    def test_unsorted_overlapping_same_as_sorted(self) -> None:
+        assert map_span(0.0, 10.0, [(5.0, 9.0), (3.0, 7.0)]) == (0.0, 4.0)
+
+    def test_union_fully_covers_span(self) -> None:
+        # No single cut contains (2,5), but [1,3] and [2.5,6] together do.
+        assert map_span(2.0, 5.0, [(1.0, 3.0), (2.5, 6.0)]) is None
+
+    def test_union_covers_whole_timeline_except_tail(self) -> None:
+        # Cuts [0,4] and [3,9] merge to [0,9]: caption (0,10) → (9,10) → (0,1).
+        assert map_span(0.0, 10.0, [(0.0, 4.0), (3.0, 9.0)]) == (0.0, 1.0)
+
+    def test_overlapping_cuts_interior_to_caption(self) -> None:
+        # Caption (2,12) with overlapping cuts (3,7),(5,9): removed 6s,
+        # both endpoints outside the union → output (2,6).
+        assert map_span(2.0, 12.0, [(3.0, 7.0), (5.0, 9.0)]) == (2.0, 6.0)
+
+    def test_kept_complement_agrees_with_map_span(self) -> None:
+        from openclip.engine.cutplan import CutDecision, kept_intervals
+
+        cuts = [(3.0, 7.0), (5.0, 9.0), (11.0, 11.5)]
+        duration = 14.0
+        fake = [
+            CutDecision(kind="silence", start_s=s, end_s=e, reason="", confidence=1.0)
+            for s, e in cuts
+        ]
+        kept_total = sum(e - s for s, e in kept_intervals(fake, duration))
+        mapped = map_span(0.0, duration, cuts)
+        assert mapped is not None
+        assert mapped[1] - mapped[0] == pytest.approx(kept_total, abs=EPS)
 
 
 class TestMapAlignment:

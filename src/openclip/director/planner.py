@@ -14,21 +14,14 @@ project's reviewed cut plan, preserving the meaning-preservation rule.
 
 from __future__ import annotations
 
-import re
-
 from openclip.director.models import Decision, EditDecisionList
+from openclip.engine.jsonio import as_float, as_int
 from openclip.engine.project import Project
-from openclip.engine.script import tokenize
-
-_SECTION_RE = re.compile(r"^\s*(?:Section|#)\s*[:：]\s*(.+)$", re.IGNORECASE)
-_KEYWORD_RE = re.compile(r"^\s*(?:Keyword|Example)\s*[:：]\s*(.+)$", re.IGNORECASE)
-_DIAGRAM_RE = re.compile(r"^\s*Diagram\s*[:：]\s*(\S+)$", re.IGNORECASE)
+from openclip.engine.script import marker_payload, tokenize
 
 
 def _line_alignment(project: Project) -> dict[int, tuple[float, float]]:
     """Aligned (start, end) per script line index from the cached alignment."""
-    from openclip.engine.jsonio import as_float, as_int
-
     spans: dict[int, tuple[float, float]] = {}
     if project.alignment is None:
         return spans
@@ -42,21 +35,11 @@ def _line_alignment(project: Project) -> dict[int, tuple[float, float]]:
     return spans
 
 
-def _marker_match(
-    primary: str,
-) -> tuple[re.Match[str] | None, re.Match[str] | None, re.Match[str] | None]:
-    return (
-        _SECTION_RE.match(primary),
-        _KEYWORD_RE.match(primary),
-        _DIAGRAM_RE.match(primary),
-    )
-
-
 def plan_from_project(project: Project) -> EditDecisionList:
     """Produce the EDL for a project (analysis must have run first)."""
     aligned = _line_alignment(project)
     lines = project.script.lines
-    marker_flags = [any(_marker_match(ln.primary)) for ln in lines]
+    marker_flags = [ln.is_marker for ln in lines]
 
     def next_aligned_spoken(index: int) -> tuple[float, float] | None:
         """Span of the next aligned, non-marker line at or after `index`."""
@@ -86,8 +69,8 @@ def plan_from_project(project: Project) -> EditDecisionList:
             )
 
     for line in lines:
-        section_m, keyword_m, diagram_m = _marker_match(line.primary)
-        is_marker = bool(section_m or keyword_m or diagram_m)
+        is_marker = line.is_marker
+        payload = marker_payload(line.primary)
         span = aligned.get(line.index)
 
         if not is_marker and span is not None:
@@ -112,20 +95,21 @@ def plan_from_project(project: Project) -> EditDecisionList:
             target = next_aligned_spoken(line.index)
             if target is None:
                 continue
-            if section_m is not None:
+            kind, value = payload if payload else ("", "")
+            if kind == "section":
                 decisions.append(
                     Decision(
                         id=f"section-{line.index:03d}",
                         kind="section_title",
                         source_line=line.index,
                         source_span=target,
-                        params={"title": section_m.group(1).strip()},
+                        params={"title": value},
                         rationale=f"Section marker on line {line.index}",
                         status="pending",
                     )
                 )
-            if keyword_m is not None:
-                term = keyword_m.group(1).strip().strip("\"'")
+            if kind == "keyword":
+                term = value.strip("\"'")
                 decisions.append(
                     Decision(
                         id=f"callout-{line.index:03d}",
@@ -137,14 +121,14 @@ def plan_from_project(project: Project) -> EditDecisionList:
                         status="pending",
                     )
                 )
-            if diagram_m is not None:
+            if kind == "diagram":
                 decisions.append(
                     Decision(
                         id=f"diagram-{line.index:03d}",
                         kind="diagram_slot",
                         source_line=line.index,
                         source_span=target,
-                        params={"asset": diagram_m.group(1)},
+                        params={"asset": value},
                         rationale=f"Diagram marker on line {line.index}",
                         status="pending",
                     )

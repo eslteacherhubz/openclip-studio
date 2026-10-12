@@ -54,6 +54,25 @@ class RenderResult:
     audio_enhanced: bool
 
 
+def normalize_cut_spans(
+    cut_spans: list[tuple[float, float]],
+) -> list[tuple[float, float]]:
+    """Sort and merge cut spans (overlaps, duplicates, adjacency).
+
+    All downstream timeline math (map_span offsets, kept intervals, decision
+    execution) runs on this normalized form so overlapping cuts like [3,7]
+    and [5,9] are removed exactly once (as [3,9] = 6 s), never double-counted.
+    """
+    spans = sorted((s, e) for s, e in cut_spans if e > s)
+    merged: list[tuple[float, float]] = []
+    for s, e in spans:
+        if merged and s <= merged[-1][1] + 1e-9:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+        else:
+            merged.append((s, e))
+    return merged
+
+
 def map_span(
     start_s: float,
     end_s: float,
@@ -64,11 +83,12 @@ def map_span(
     Each endpoint is shifted by the total duration of accepted cuts that lie
     before it, so a cut *inside* the span compresses it (caption 0–10s with a
     removed 3–6s interval maps to 0–7s). Spans fully inside a cut (or clipped
-    to nothing) return None. Overlapping/unsorted cut lists are normalized.
+    to nothing) return None. Overlapping/unsorted cut lists are normalized
+    first, so removed time is never counted twice.
     """
     if end_s <= start_s:
         return None
-    cuts = sorted(cut_spans)
+    cuts = normalize_cut_spans(cut_spans)
     s, e = start_s, end_s
     for cs, ce in cuts:
         if ce <= s or cs >= e:
@@ -207,7 +227,7 @@ def render_project(
     opts = options or RenderOptions()
 
     cuts = project.cut_plan.accepted_cuts() if project.cut_plan else []
-    cut_spans = sorted((c.start_s, c.end_s) for c in cuts)
+    cut_spans = normalize_cut_spans([(c.start_s, c.end_s) for c in cuts])
     kept = kept_intervals(cuts, media.duration_s)
     if not kept:
         kept = [(0.0, media.duration_s)]

@@ -1,6 +1,42 @@
 # CHECKPOINT — exact, resumable progress state
 
-Last updated: 2026-10-11 — Correction pass 1 complete on branch `correction/caption-mapping-and-packaging` (PR open); five stage PRs remain open awaiting owner review.
+Last updated: 2026-10-11 — Correction pass 2 (PR #6 final correction) complete; final CI verification of the exact head SHA in progress.
+
+## Correction pass 2 (this branch, on top of correction pass 1)
+
+Three corrections per the review assignment, all regression-tested:
+
+1. **Director overlay timing** — `director/executor.py` previously rendered
+   callout/title events at raw *source-timeline* spans. Now every overlay
+   span is mapped through `map_span` against the normalized accepted cuts;
+   overlays fully inside cuts are dropped. Video-render regression test
+   `tests/test_director_render_timing.py` probes exported frames (ffmpeg
+   BMP dumps parsed with stdlib) for the callout colour: before cuts,
+   clipped at cut start, between cuts, clipped at cut end, after all cuts,
+   fully removed, plus raw-timestamp sentinel frames that must stay empty.
+   Negative control verified: with raw spans the sentinels show 289/285
+   px (bug detected); with the fix <10 px.
+2. **Review enforcement** — captions now render ONLY for accepted
+   `caption` decisions (the old path burned captions from project state,
+   ignoring the EDL); pending decisions never render even with
+   `require_review=False`; `RenderOptions.burn_captions` suppresses
+   captions only (callouts/titles governed by their own decision status);
+   engine `render_project` behavior unchanged (all prior tests green).
+   Found+fixed a related engine defect while testing: marker lines
+   ("Keyword: ...") were being fuzzy-matched by the aligner, stealing the
+   next sentence's ASR words and unaligning it. Markers are now detected in
+   `engine/script.py` (`is_marker_text`/`marker_payload`) and skipped by
+   both aligner paths.
+3. **Cut normalization** — new public `engine/render.py::normalize_cut_spans`
+   (sort + merge overlapping/duplicate/adjacent) used by `map_span`,
+   `render_project`, and the director executor, so removed time is counted
+   exactly once everywhere. The assigned case is tested: cuts [3,7]+[5,9]
+   inside a 0–10 s caption → 4 s output interval. Kept-interval complement
+   and `map_span` cross-checked for agreement.
+
+Suite: 103 tests green (10 new normalization/mapping, 12 new director
+review+timing, 9 pixel render-regression, plus all previous); mypy --strict
+clean (28 files); ruff clean.
 
 ## Environment (dev sandbox where this work ran)
 
@@ -70,11 +106,12 @@ Test suite now 70 tests; mypy --strict clean (28 files); ruff clean.
 
 ## In flight
 
-- Nothing in flight. PR #6 (`correction/caption-mapping-and-packaging`) is
-  fully green: CI run 38168146643, 9/9 jobs, including the expanded Windows
-  packaging battery (frozen export E2E "10.3s h264/aac", frozen gaze smoke,
-  frozen whisper align 3/3 lines conf 1.00 via SAPI speech + first-use model
-  download, GUI alive-check) and the artifact upload.
+- Correction pass 2 pushed to PR #6 (`correction/caption-mapping-and-packaging`);
+  full CI (incl. windows-latest test matrix and the Windows packaging job)
+  dispatched for the new head. Correction pass 1's verification stands: CI
+  run 38168146643, 9/9 jobs (frozen export E2E "10.3s h264/aac", frozen gaze
+  smoke, frozen whisper align 3/3 lines conf 1.00 via SAPI speech +
+  first-use model download, GUI alive-check, artifact upload).
 
 ## Blocked
 

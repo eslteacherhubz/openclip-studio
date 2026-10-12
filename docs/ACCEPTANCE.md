@@ -65,6 +65,16 @@ checkboxes in the same PR that completes the stage.
 - [x] Production Director architecture + v1 skeleton (docs/PRODUCTION_DIRECTOR.md, `src/openclip/director/`): deterministic EDL planner, typed inspectable decisions, review gating, meaning-preservation invariants, executor with explicit unimplemented kinds; 15 tests
 - [ ] PR opened from `correction/caption-mapping-and-packaging` → merged by owner
 
+## Correction pass 2 — overlay timing, review enforcement, cut normalization
+
+- [x] Director overlays use export-timeline timestamps via `map_span` against normalized accepted cuts; overlays fully inside cuts are dropped (`director/executor.py`)
+- [x] Rejected/pending `caption` decisions never render; `RenderOptions.burn_captions` honored through the director path (suppresses captions only; callout/title decisions governed by their own status); engine `render_project` behavior unchanged
+- [x] `normalize_cut_spans` (merge overlap/duplicate/adjacent) shared by `map_span`, `render_project`, and the executor; `cuts [3,7]+[5,9]` in a 0–10 s caption → 4 s output (tested); renderer kept-intervals and mapping agree (cross-checked)
+- [x] Marker lines detected in `engine/script.py` and skipped by the aligner (they no longer steal ASR words from the next spoken line — defect found by the review-enforcement tests)
+- [x] Pixel-verified video-render regression (`tests/test_director_render_timing.py`): overlays probed in exported frames before/during/after cuts, fully-removed overlay absent, raw-timestamp sentinels empty; negative-controlled against the bug (289/285 px leak detected with raw spans, <10 px after fix)
+- [x] Full suite + mypy --strict + ruff green; Windows packaging CI exercised via the dispatched full run
+- [ ] Merged by owner (PR #6, final SHA recorded in CHECKPOINT)
+
 ## Dependency ledger
 
 Every runtime/test dependency, license, and where it is used. Keep in sync with `pyproject.toml`.
