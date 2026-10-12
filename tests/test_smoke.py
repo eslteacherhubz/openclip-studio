@@ -4,7 +4,11 @@ def test_smoke() -> None:
     assert __version__.startswith("0.")
 
 
-def test_cli_version(capsys: object) -> None:
+def test_cli_version() -> None:
+    import pytest
+
     from openclip.cli import main
 
-    assert main(["--version"]) == 0
+    with pytest.raises(SystemExit) as exc:
+        main(["--version"])
+    assert exc.value.code == 0
