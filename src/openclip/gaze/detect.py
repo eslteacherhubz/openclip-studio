@@ -128,7 +128,15 @@ def _face_cascade() -> cv2.CascadeClassifier:
     global _FACE_CASCADE
     if _FACE_CASCADE is None:
         path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"  # type: ignore[attr-defined]
-        _FACE_CASCADE = cv2.CascadeClassifier(path)
+        cascade = cv2.CascadeClassifier(path)
+        if cascade.empty():
+            raise RuntimeError(
+                "Face-detection cascade failed to load "
+                f"({path}). In a packaged build this means the OpenCV "
+                "cascade data files were not collected — see "
+                "packaging/openclip.spec (_optional_datas)."
+            )
+        _FACE_CASCADE = cascade
     return _FACE_CASCADE
 
 

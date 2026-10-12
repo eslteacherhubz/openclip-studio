@@ -54,6 +54,25 @@ class RenderResult:
     audio_enhanced: bool
 
 
+def normalize_cut_spans(
+    cut_spans: list[tuple[float, float]],
+) -> list[tuple[float, float]]:
+    """Sort and merge cut spans (overlaps, duplicates, adjacency).
+
+    All downstream timeline math (map_span offsets, kept intervals, decision
+    execution) runs on this normalized form so overlapping cuts like [3,7]
+    and [5,9] are removed exactly once (as [3,9] = 6 s), never double-counted.
+    """
+    spans = sorted((s, e) for s, e in cut_spans if e > s)
+    merged: list[tuple[float, float]] = []
+    for s, e in spans:
+        if merged and s <= merged[-1][1] + 1e-9:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+        else:
+            merged.append((s, e))
+    return merged
+
+
 def map_span(
     start_s: float,
     end_s: float,
@@ -61,27 +80,32 @@ def map_span(
 ) -> tuple[float, float] | None:
     """Map a [start, end] span from source to exported timeline.
 
-    Returns None when the span is entirely inside a cut.
+    Each endpoint is shifted by the total duration of accepted cuts that lie
+    before it, so a cut *inside* the span compresses it (caption 0–10s with a
+    removed 3–6s interval maps to 0–7s). Spans fully inside a cut (or clipped
+    to nothing) return None. Overlapping/unsorted cut lists are normalized
+    first, so removed time is never counted twice.
     """
+    if end_s <= start_s:
+        return None
+    cuts = normalize_cut_spans(cut_spans)
     s, e = start_s, end_s
-    for cs, ce in cut_spans:
-        if ce <= s:
-            continue
-        if cs >= e:
-            break
+    for cs, ce in cuts:
+        if ce <= s or cs >= e:
+            continue  # cut entirely outside the span
         if cs <= s and ce >= e:
-            return None
+            return None  # span fully inside this cut
         if cs <= s < ce:
-            s = ce
-        if cs < e <= ce:
-            e = cs
-        if e <= s:
+            s = ce  # span starts inside the cut: resume at the cut's end
+        elif cs < e <= ce:
+            e = cs  # span ends inside the cut: stop at the cut's start
+        if e - s <= 1e-9:
             return None
-    offset_before = sum(ce - cs for cs, ce in cut_spans if ce <= s)
-    offset_inside = sum(
-        min(ce, s) - cs for cs, ce in cut_spans if cs < s < ce
-    )
-    return s - offset_before - offset_inside, e - offset_before - offset_inside
+
+    def removed_before(t: float) -> float:
+        return sum(ce - cs for cs, ce in cuts if ce <= t)
+
+    return s - removed_before(s), e - removed_before(e)
 
 
 def map_alignment(alignment: Alignment, cut_spans: list[tuple[float, float]]) -> Alignment:
@@ -106,6 +130,92 @@ def map_alignment(alignment: Alignment, cut_spans: list[tuple[float, float]]) ->
     return Alignment(lines=mapped, transcriber=alignment.transcriber)
 
 
+def build_export_ass(
+    project: Project,
+    media: MediaInfo,
+    cut_spans: list[tuple[float, float]],
+) -> str | None:
+    """Build the caption ASS document (export-timeline times) for a project.
+
+    Public so the Production Director can compose captions together with its
+    own overlay events into one ASS document. Returns None when there is
+    nothing to burn.
+    """
+    if project.alignment is None or len(project.script) == 0:
+        return None
+    from openclip.engine.align import alignment_from_dict
+
+    alignment = alignment_from_dict(project.alignment)
+    mapped = map_alignment(alignment, cut_spans)
+    return build_ass(
+        project.script.to_dict(),
+        mapped,
+        media.width or 1280,
+        media.height or 720,
+        project.captions,
+    )
+
+
+def render_export(
+    media: MediaInfo,
+    kept: list[tuple[float, float]],
+    cut_spans: list[tuple[float, float]],
+    ass_text: str | None,
+    audio_chain: str | None,
+    out_path: str | Path,
+    opts: RenderOptions,
+    progress: ProgressFn | None = None,
+) -> RenderResult:
+    """Execute kept intervals + one final pass (captions/audio) deterministically.
+
+    Shared by `render_project` and the director executor. `ass_text` must
+    already be in export-timeline time.
+    """
+    out = Path(out_path)
+    if out.parent != Path("."):
+        out.parent.mkdir(parents=True, exist_ok=True)
+    kept_duration = sum(e - s for s, e in kept)
+
+    workdir = Path(tempfile.mkdtemp(prefix="openclip-render-"))
+    try:
+        segments = _render_segments(media, kept, workdir, opts, progress)
+        master = workdir / "master.mp4"
+        _concat(segments, master, media.has_audio)
+
+        need_video = ass_text is not None
+        need_audio = audio_chain is not None
+        if not need_video and not need_audio:
+            shutil.move(str(master), str(out))
+            captions_burned = False
+        else:
+            vf: list[str] = []
+            if ass_text is not None:
+                ass_path = workdir / "captions.ass"
+                ass_path.write_text(ass_text, encoding="utf-8")
+                vf.append(f"ass=filename='{escape_filter_path(ass_path)}'")
+            _final_pass(
+                master,
+                out,
+                vf_graph=",".join(vf) if vf else None,
+                af_chain=audio_chain,
+                crf=opts.crf,
+                preset=opts.x264_preset,
+                has_audio=media.has_audio,
+            )
+            captions_burned = True
+        return RenderResult(
+            out=out,
+            kept_duration_s=kept_duration,
+            segments=len(segments),
+            cuts_applied=len(cut_spans),
+            captions_burned=captions_burned,
+            audio_enhanced=audio_chain is not None,
+        )
+    finally:
+        if not opts.keep_workdir:
+            shutil.rmtree(workdir, ignore_errors=True)
+
+
 def render_project(
     project: Project,
     media: MediaInfo,
@@ -115,77 +225,31 @@ def render_project(
 ) -> RenderResult:
     """Render the project to an MP4 at `out_path`."""
     opts = options or RenderOptions()
-    out = Path(out_path)
-    if out.parent != Path("."):
-        out.parent.mkdir(parents=True, exist_ok=True)
 
     cuts = project.cut_plan.accepted_cuts() if project.cut_plan else []
-    cut_spans = sorted((c.start_s, c.end_s) for c in cuts)
+    cut_spans = normalize_cut_spans([(c.start_s, c.end_s) for c in cuts])
     kept = kept_intervals(cuts, media.duration_s)
     if not kept:
         kept = [(0.0, media.duration_s)]
-        cuts = []
-    kept_duration = sum(e - s for s, e in kept)
+        cut_spans = []
 
     audio_preset = opts.audio_preset or project.audio_preset
     audio_chain = build_audio_filter(audio_preset) if media.has_audio else None
 
-    want_captions = (
-        opts.burn_captions
-        and project.alignment is not None
-        and len(project.script) > 0
+    ass_text: str | None = None
+    if opts.burn_captions:
+        ass_text = build_export_ass(project, media, cut_spans)
+
+    return render_export(
+        media=media,
+        kept=kept,
+        cut_spans=cut_spans,
+        ass_text=ass_text,
+        audio_chain=audio_chain,
+        out_path=out_path,
+        opts=opts,
+        progress=progress,
     )
-
-    workdir = Path(tempfile.mkdtemp(prefix="openclip-render-"))
-    try:
-        segments = _render_segments(media, kept, workdir, opts, progress)
-        master = workdir / "master.mp4"
-        _concat(segments, master, media.has_audio)
-
-        need_video = want_captions
-        need_audio = audio_chain is not None
-        final = out
-        if not need_video and not need_audio:
-            shutil.move(str(master), str(final))
-        else:
-            vf: list[str] = []
-            ass_path: Path | None = None
-            if want_captions and project.alignment is not None:
-                from openclip.engine.align import alignment_from_dict
-
-                alignment = alignment_from_dict(project.alignment)
-                mapped = map_alignment(alignment, cut_spans)
-                ass_text = build_ass(
-                    project.script.to_dict(),
-                    mapped,
-                    media.width or 1280,
-                    media.height or 720,
-                    project.captions,
-                )
-                ass_path = workdir / "captions.ass"
-                ass_path.write_text(ass_text, encoding="utf-8")
-                vf.append(f"ass=filename='{escape_filter_path(ass_path)}'")
-            af = audio_chain
-            _final_pass(
-                master,
-                final,
-                vf_graph=",".join(vf) if vf else None,
-                af_chain=af,
-                crf=opts.crf,
-                preset=opts.x264_preset,
-                has_audio=media.has_audio,
-            )
-        return RenderResult(
-            out=final,
-            kept_duration_s=kept_duration,
-            segments=len(segments),
-            cuts_applied=len(cuts),
-            captions_burned=bool(want_captions and ass_path),
-            audio_enhanced=audio_chain is not None,
-        )
-    finally:
-        if not opts.keep_workdir:
-            shutil.rmtree(workdir, ignore_errors=True)
 
 
 def _render_segments(

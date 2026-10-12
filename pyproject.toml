@@ -70,7 +70,7 @@ src = ["src", "tests"]
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 # RUF001: intentional CJK punctuation in bilingual content
-ignore = ["SIM108", "RUF001"]
+ignore = ["SIM108", "RUF001", "RUF002", "RUF003"]
 
 [tool.mypy]
 strict = true

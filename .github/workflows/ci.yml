@@ -115,10 +115,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install app + gui extra + pyinstaller
+      - name: Install app + all feature extras + pyinstaller
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[gui,dev]"
+          pip install -e ".[gui,asr,gaze,dev]"
           pip install pyinstaller
       - name: Build one-folder package
         run: pyinstaller --noconfirm packaging/openclip.spec
@@ -126,6 +126,38 @@ jobs:
         run: |
           dist\OpenClipStudio\OpenClipCLI.exe --version
           dist\OpenClipStudio\OpenClipCLI.exe probe --help
+      - name: Verify frozen video export (synth, edit, export, probe-assert)
+        run: |
+          dist\OpenClipStudio\OpenClipCLI.exe synth --out smoke.mp4
+          "Hello everyone, welcome to the lesson. :: 大家好`n`nToday we learn five new words. :: 今天学五个新单词。" | Out-File -Encoding utf8 smoke_script.txt
+          dist\OpenClipStudio\OpenClipCLI.exe new --media smoke.mp4 --script smoke_script.txt -o smoke.json
+          dist\OpenClipStudio\OpenClipCLI.exe auto smoke.json -o smoke_out.mp4 -t even
+          $info = dist\OpenClipStudio\OpenClipCLI.exe probe smoke_out.mp4 | ConvertFrom-Json
+          if ($info.vcodec -ne "h264") { throw "expected h264, got $($info.vcodec)" }
+          if ($info.acodec -ne "aac") { throw "expected aac, got $($info.acodec)" }
+          if ($info.duration_s -le 5) { throw "export too short: $($info.duration_s)" }
+          Write-Host "frozen export OK: $($info.duration_s)s h264/aac"
+      - name: Verify bundled gaze (opencv + cascades in the frozen app)
+        run: |
+          dist\OpenClipStudio\OpenClipCLI.exe gaze-analyze smoke.mp4 --max-frames 3
+      - name: Verify bundled whisper (SAPI speech + first-use model download)
+        run: |
+          Add-Type -AssemblyName System.Speech
+          $tts = New-Object System.Speech.Synthesis.SpeechSynthesizer
+          $tts.SetOutputToWaveFile("speech.wav")
+          $tts.Speak("Hello everyone, welcome to the lesson. Today we will learn five new words. Please listen and repeat after me.")
+          $tts.Dispose()
+          "Hello everyone, welcome to the lesson.`n`nToday we will learn five new words.`n`nPlease listen and repeat after me." | Out-File -Encoding utf8 speech_script.txt
+          dist\OpenClipStudio\OpenClipCLI.exe new --media speech.wav --script speech_script.txt -o speech.json
+          dist\OpenClipStudio\OpenClipCLI.exe align speech.json -t whisper --language en
+      - name: Verify packaged GUI launches (offscreen, stays alive)
+        run: |
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $p = Start-Process -FilePath "dist\OpenClipStudio\OpenClipStudio.exe" -PassThru
+          Start-Sleep -Seconds 15
+          if ($p.HasExited) { throw "GUI exited early with code $($p.ExitCode)" }
+          Stop-Process -Id $p.Id -Force
+          Write-Host "GUI stayed alive for 15s"
       - name: Archive package
         run: Compress-Archive -Path dist\OpenClipStudio -DestinationPath OpenClipStudio-windows-x64.zip
       - name: Checksum

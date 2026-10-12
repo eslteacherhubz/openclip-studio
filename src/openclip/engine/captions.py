@@ -65,7 +65,7 @@ class CaptionStyle:
         )
 
 
-def _ts(seconds: float) -> str:
+def format_ass_time(seconds: float) -> str:
     """Format seconds as ASS timestamp H:MM:SS.cc (centisecond precision)."""
     cs = round(max(0.0, seconds) * 100.0)
     h, rem = divmod(cs, 360000)
@@ -102,17 +102,16 @@ def _karaoke_text(line: LineAlignment) -> str:
     return "".join(parts)
 
 
-def build_ass(
-    script_lines: list[dict[str, object]],
-    alignment: Alignment,
+def build_ass_header(
     res_x: int,
     res_y: int,
     style: CaptionStyle,
+    extra_styles: tuple[str, ...] = (),
 ) -> str:
-    """Build a complete ASS document with events in *final-timeline* times.
+    """ASS document header through the [Events] Format line.
 
-    Callers must map source-timeline alignment into the export timeline
-    (post-cut) before calling this; see ``openclip.engine.render``.
+    `extra_styles` are appended inside [V4+ Styles] (e.g. the director's
+    Callout style) so composed documents stay valid ASS.
     """
     style.animation = style.animation if style.animation in ANIMATIONS else "fade"
     head = [
@@ -134,11 +133,22 @@ def build_ass(
         f"Style: Support,{style.support_font},{style.support_size},"
         f"{style.support_color},&H000000FF,&H00101010,&H80000000,"
         f"0,0,0,0,100,100,0,0,1,{style.outline},1,2,40,40,{style.support_margin_v},1",
+        *extra_styles,
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
+    return "\n".join(head)
 
+
+def caption_events(
+    script_lines: list[dict[str, object]],
+    alignment: Alignment,
+    res_x: int,
+    res_y: int,
+    style: CaptionStyle,
+) -> list[str]:
+    """Dialogue lines for the aligned script lines (final-timeline times)."""
     by_index = {ln.index: ln for ln in alignment.lines}
     events: list[str] = []
     for entry in script_lines:
@@ -146,7 +156,7 @@ def build_ass(
         line = by_index.get(idx)
         if line is None or line.confidence <= 0.0 or line.end_s <= line.start_s:
             continue
-        start, end = _ts(line.start_s), _ts(line.end_s + 0.05)
+        start, end = format_ass_time(line.start_s), format_ass_time(line.end_s + 0.05)
         primary_text = str(entry.get("primary", ""))
         support_text = str(entry.get("support", ""))
         if style.karaoke:
@@ -164,4 +174,21 @@ def build_ass(
             events.append(
                 f"Dialogue: 1,{start},{end},Support,,0,0,0,,{tag_support}{safe_support}"
             )
-    return "\n".join(head + events) + "\n"
+    return events
+
+
+def build_ass(
+    script_lines: list[dict[str, object]],
+    alignment: Alignment,
+    res_x: int,
+    res_y: int,
+    style: CaptionStyle,
+) -> str:
+    """Build a complete ASS document with events in *final-timeline* times.
+
+    Callers must map source-timeline alignment into the export timeline
+    (post-cut) before calling this; see ``openclip.engine.render``.
+    """
+    header = build_ass_header(res_x, res_y, style)
+    events = caption_events(script_lines, alignment, res_x, res_y, style)
+    return "\n".join([header, *events]) + "\n"

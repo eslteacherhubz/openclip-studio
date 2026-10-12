@@ -1,4 +1,11 @@
-"""Lesson script model: ordered bilingual sentence pairs."""
+"""Lesson script model: ordered bilingual sentence pairs.
+
+Scripts may contain *marker* lines (``Section:``, ``Keyword:``, ``Example:``,
+``Diagram:``) that direct automated compositions but are never spoken.
+Markers are detected here — one shared definition — so the aligner can skip
+them (they must not consume ASR words) and the Production Director can
+attach them to the next spoken line.
+"""
 
 from __future__ import annotations
 
@@ -9,12 +16,35 @@ _PUNCT_RE = re.compile(r"[^\w\s]", re.UNICODE)
 _WS_RE = re.compile(r"\s+")
 _SUPPORT_SEP = " :: "
 
+_MARKER_RES = (
+    re.compile(r"^\s*(?:Section|#)\s*[:：]\s*(.+)$", re.IGNORECASE),
+    re.compile(r"^\s*(?:Keyword|Example)\s*[:：]\s*(.+)$", re.IGNORECASE),
+    re.compile(r"^\s*Diagram\s*[:：]\s*(\S+)$", re.IGNORECASE),
+)
+
+
+def is_marker_text(primary: str) -> bool:
+    """True when a script line is a composition marker, not spoken content."""
+    return any(rx.match(primary) for rx in _MARKER_RES)
+
+
+def marker_payload(primary: str) -> tuple[str, str] | None:
+    """(marker_kind, payload) for a marker line, else None."""
+    for kind, rx in zip(("section", "keyword", "diagram"), _MARKER_RES, strict=True):
+        if (m := rx.match(primary)):
+            return kind, m.group(1).strip()
+    return None
+
 
 @dataclass
 class ScriptLine:
     index: int
     primary: str
     support: str = ""
+
+    @property
+    def is_marker(self) -> bool:
+        return is_marker_text(self.primary)
 
     def tokens(self) -> list[str]:
         return tokenize(self.primary)

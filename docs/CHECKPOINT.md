@@ -1,6 +1,57 @@
 # CHECKPOINT — exact, resumable progress state
 
-Last updated: 2026-10-09, end of Stage 5 (all planned stages executed; awaiting owner review)
+Last updated: 2026-10-12 — Correction pass 2 (PR #6 final correction) complete and CI-verified.
+
+## Correction pass 2 (this branch, on top of correction pass 1)
+
+Three corrections per the review assignment, all regression-tested:
+
+1. **Director overlay timing** — `director/executor.py` previously rendered
+   callout/title events at raw *source-timeline* spans. Now every overlay
+   span is mapped through `map_span` against the normalized accepted cuts;
+   overlays fully inside cuts are dropped. Video-render regression test
+   `tests/test_director_render_timing.py` probes exported frames (ffmpeg
+   BMP dumps parsed with stdlib) for the callout colour: before cuts,
+   clipped at cut start, between cuts, clipped at cut end, after all cuts,
+   fully removed, plus raw-timestamp sentinel frames that must stay empty.
+   Negative control verified: with raw spans the sentinels show 289/320/285
+   px (bug detected at 3.8 s, 5.2 s, 6.4 s); with the fix <10 px.
+2. **Review enforcement** — captions now render ONLY for accepted
+   `caption` decisions (the old path burned captions from project state,
+   ignoring the EDL); pending decisions never render even with
+   `require_review=False`; `RenderOptions.burn_captions` suppresses
+   captions only (callouts/titles governed by their own decision status);
+   engine `render_project` behavior unchanged (all prior tests green).
+   Found+fixed a related engine defect while testing: marker lines
+   ("Keyword: ...") were being fuzzy-matched by the aligner, stealing the
+   next sentence's ASR words and unaligning it. Markers are now detected in
+   `engine/script.py` (`is_marker_text`/`marker_payload`) and skipped by
+   both aligner paths.
+3. **Cut normalization** — new public `engine/render.py::normalize_cut_spans`
+   (sort + merge overlapping/duplicate/adjacent) used by `map_span`,
+   `render_project`, and the director executor, so removed time is counted
+   exactly once everywhere. The assigned case is tested: cuts [3,7]+[5,9]
+   inside a 0–10 s caption → 4 s output interval. Kept-interval complement
+   and `map_span` cross-checked for agreement.
+
+## Verification record (correction pass 2)
+
+- Local (dev sandbox): 103 passed, ruff clean, `mypy --strict` clean
+  (28 files). ASR integration tests run locally (faster-whisper +
+  espeak-ng installed).
+- CI, code-complete SHA `519022f`, run 38198487097: **9/9 jobs green** —
+  lint, mypy, test (3.11: 90 passed/13 skipped), test (3.12), gui (offscreen
+  PySide6), gaze (rig experiments), test-windows (3.11 + 3.12 — the pixel
+  overlay-timing regression runs on real Windows with libass), and
+  package-windows (frozen artifact + smoke battery).
+- This checkpoint commit is docs-only; the final head SHA gets its own
+  dispatched green run recorded below.
+
+## Final SHA verification
+
+- HEAD at publication of this checkpoint: see `git log -1` — the dispatched
+  CI run for this exact SHA must be green before the work is called
+  complete (recorded here once finished).
 
 ## Environment (dev sandbox where this work ran)
 
@@ -11,15 +62,14 @@ Last updated: 2026-10-09, end of Stage 5 (all planned stages executed; awaiting 
   5.0 removed CascadeClassifier), PySide6 6.8.0.2 + system Qt libs
   (libegl1 libgl1 libxkbcommon0 libglib2.0-0 libdbus-1-3 libfontconfig1
   libpulse0 — same set CI installs), faster-whisper (tiny model cached),
-  pyinstaller 6.22 (spec validated locally).
-- GUI tests run offscreen (`QT_QPA_PLATFORM=offscreen`); QMediaPlayer has no
-  backend in this minimal sandbox (warnings only; works on real desktops).
+  pyinstaller 6.22 (spec validated locally, incl. asr+gaze frozen features).
 - `gh` authenticated as `eslteacherhubz` (repo + workflow scopes).
 - Windows **not** available here: covered by CI (`windows-latest` engine
-  tests + packaging smoke) and deferred to owner validation
+  tests + packaging smoke incl. frozen export E2E, frozen gaze, frozen
+  whisper via SAPI TTS, GUI alive-check) and by owner validation
   (docs/OWNER_VALIDATION.md).
 
-## Done — full 72-hour plan executed
+## Done — all planned stages + correction pass 1
 
 | Stage | Where | State |
 |---|---|---|
@@ -27,71 +77,96 @@ Last updated: 2026-10-09, end of Stage 5 (all planned stages executed; awaiting 
 | 1 Engine core (alignment, cuts, captions, audio, render, CLI) | PR #1 `feature/engine-core` | green CI, awaiting owner |
 | 2 Desktop app (PySide6, cut review, threaded export) | PR #2 `feature/desktop-app` | green CI, awaiting owner |
 | 3 Eye-contact research (rig, detector, warp, eval harness) | PR #3 `feature/eye-contact` | green CI, awaiting owner |
-| 4 CI matrix + Windows packaging | PR #4 `feature/ci-packaging` | green CI (9/9 jobs; Windows artifact built, 97 MB zip + sha256) |
-| 5 Hardening + handoff | PR #5 `feature/hardening` | green CI (9/9 jobs) — owner validation doc, docs map, this file |
+| 4 CI matrix + Windows packaging | PR #4 `feature/ci-packaging` | green CI (9/9 jobs; Windows artifact built, zip + sha256) |
+| 5 Hardening + handoff | PR #5 `feature/hardening` | green CI (9/9 jobs) |
+| **Correction 1** | PR #6 `correction/caption-mapping-and-packaging` | green CI (9/9 jobs, run 38168146643) — see below |
 
-Key measured results (all reproducible via `pytest -m gaze`):
-- Gaze detection E1: 1.36 px mean error; correction E2: 65.8% mean offset
-  reduction (75.6% @ ±5%, 80.0% @ ±15%, 34% @ ±25% — warp-method limit,
-  documented); E3: 99 dB PSNR outside eye; E4: 147 fps CPU; pivotal
-  parameter study E5: displacement-field reach 2.3× → 15.8% reduction
-  (sclera slides with iris) vs 1.35× → 92.8% — see
-  docs/EYE_CONTACT_RESEARCH.md. Synthetic rig only; NO real-footage claims.
-- Engine: 33-test suite (unit + real-render integration + PSNR
-  caption-burn proof + CLI E2E + real whisper-on-espeak ASR (skips in CI)
-  + 4 offscreen GUI tests + 7 gaze tests). mypy --strict clean (24 files),
-  ruff clean. PyInstaller spec validated on Linux (frozen CLI: --version,
-  synth, probe; frozen GUI launches offscreen; imageio-ffmpeg binary is
-  collected into the bundle).
+### Correction pass 1 (this branch)
+
+1. **P1 — caption/timeline mapping fixed** (`engine/render.py::map_span`):
+   interior cuts now compress spans correctly (caption 0–10s with cut 3–6s →
+   output 0–7s); the old code only shifted by cuts *before* the span start.
+   23 regression tests (`tests/test_caption_mapping.py`) cover multiple
+   cuts, boundary overlaps, fully-removed spans, unsorted cut lists, and
+   duration/monotonicity invariants.
+2. **P2 — Windows package audited and completed**: the artifact previously
+   did **not** contain whisper (asr) or gaze (opencv) — the packaging env
+   installed only `[gui,dev]`. Now bundles `[gui,asr,gaze]` + package data
+   (faster-whisper silero VAD ONNX, OpenCV Haar cascades — both were frozen
+   -runtime failures found by the audit). Verified inside the frozen app on
+   Linux: whisper align with first-use model download (3/3 lines, conf
+   0.92–1.00), `gaze-analyze`, full synth→edit→export→probe, probing with
+   NO ffmpeg/ffprobe on PATH (bundled binary + fallback), GUI alive-check.
+   The Windows packaging job now asserts the same battery (SAPI-TTS speech
+   for frozen whisper). Docs updated to claim exactly what is verified
+   (README feature matrix, ACCEPTANCE).
+3. **P3 — production gap assessment** (`docs/PRODUCTION_GAP_ASSESSMENT.md`):
+   per-requirement implemented/partial/missing with evidence. Headline:
+   script-directed editing core is implemented; eye-contact is
+   research-grade partial; presenter positioning, backgrounds,
+   lighting/colour, diagram timing are missing; captions ≠ motion
+   graphics; Indonesian-specific tuning not started; MP4 baseline solid
+   but unmeasured on target hardware.
+4. **P4 — Production Director** (`docs/PRODUCTION_DIRECTOR.md` +
+   `src/openclip/director/`): deterministic EDL planner (script markers →
+   typed decisions with source line/span/rationale), review gating
+   (pending blocks export), meaning-preservation invariants enforced in
+   `check_invariants`, executor that composes captions+callout/title ASS
+   and refuses unimplemented kinds explicitly (diagram_slot, color_preset,
+   reframe, background, emphasis → named NotImplemented). Behavior-
+   preserving render refactor: public `build_export_ass` + `render_export`
+   (all previous render tests still green). 15 director tests.
+
+Test suite now 70 tests; mypy --strict clean (28 files); ruff clean.
 
 ## In flight
 
-- Nothing. All five stage PRs are open with green CI (each branch verified by
-  a dispatched full run of all nine CI jobs, including the Windows package
-  build + frozen-CLI smoke test + artifact upload).
+- Correction pass 2 pushed to PR #6 (`correction/caption-mapping-and-packaging`);
+  full CI (incl. windows-latest test matrix and the Windows packaging job)
+  dispatched for the new head. Correction pass 1's verification stands: CI
+  run 38168146643, 9/9 jobs (frozen export E2E "10.3s h264/aac", frozen gaze
+  smoke, frozen whisper align 3/3 lines conf 1.00 via SAPI speech +
+  first-use model download, GUI alive-check, artifact upload).
 
 ## Blocked
 
-- Nothing. Real-hardware/real-footage validation is deliberately deferred to
-  the owner (docs/OWNER_VALIDATION.md) — per master prompt, no
-  production-readiness claims were made.
+- Nothing technical. Awaiting owner review/merge of PRs #1–#5 (stacked;
+  they conflict with main only until merged in order — CI infra commits on
+  main duplicate branch history; merging #1 first clears the path).
 
-## Next steps for the owner (in order)
+## Next steps (in order)
 
-1. Review PRs #1 → #2 → #3 → #4 → #5 (stacked; merge in order). All have
-   green (or for #4/#5: expected-green) CI. Do NOT trust claims — spot-check:
-   `pip install -e ".[dev]" && pytest -v` on any machine.
-2. Download the `OpenClipStudio-windows-x64` artifact from the last green
-   `ci` run on `main` after merging, and run docs/OWNER_VALIDATION.md on the
-   real Windows machine (10–20 min of recording + reporting).
-3. Paste gaze numbers/verdicts back into docs/EYE_CONTACT_RESEARCH.md §5/§6.
-4. If validation is satisfactory, tag `v0.1.0-rc1` on `main`.
-5. Natural next features (not in the 72h bound): blink gating for gaze
-   (needs real footage), MediaPipe FaceMesh backend, retake grouping in the
-   cut planner, GUI timeline waveform, i18n of the UI itself.
+1. Owner: review + merge PRs #1→#5, then the correction PR.
+2. Owner: run docs/OWNER_VALIDATION.md on the real Windows machine
+   (artifact now includes whisper + gaze; whisper needs one model download).
+3. Next implementation slice per docs/PRODUCTION_DIRECTOR.md §8:
+   colour/lighting presets → auto-framing → diagram slots → EDL review UI.
+4. After real-machine validation + gap closure begins: revisit
+   `docs/PRODUCTION_GAP_ASSESSMENT.md` statuses.
 
 ## Key technical notes for resuming sessions
 
 - `probe()` reads ffprobe JSON key `codec_type` (not `type`); falls back to
-  parsing `ffmpeg -i` (works in the frozen bundle without ffprobe).
-- ASR fixtures need espeak-ng speech; sine tones produce no words.
-- Synth lesson is 320x180@15fps CRF24 by design (throttled box); tests
-  assert the size. Longest silence is the 1.8s tail, not the 1.6s mid gap.
-- Aligner: rapidfuzz `token_sort_ratio` (token_set_ratio is subset-lenient
-  and matches wrong windows).
-- `run_ffmpeg` prepends `-hide_banner -nostdin` (stdin hangs otherwise).
-- OpenCV pinned <5; cv2.remap needs float32 maps;
-  `connectedComponentsWithStats` connectivity is keyword-only in stubs.
-- Gaze detector: search = aperture bbox rectangle (NOT the bright-aperture
-  mask — that excludes the dark pupil); iris radius ≈ blob extent × 0.55.
-- Actions YAML: no unquoted `word: word` in step names; actionlint
-  (/tmp/opencode/actionlint) before pushing; PR-event CI is unreliable in
-  this repo — use `gh workflow run ci.yml --ref <branch>` for branch runs.
-- mypy CI job needs `[dev,gui]` (PySide6 ships the stubs mypy checks against).
+  parsing `ffmpeg -i` (verified in the frozen bundle with empty PATH).
+- `map_span`: endpoints shift by cuts strictly before them; spans clip
+  against cuts first, then shift. Regression tests are the contract.
+- PyInstaller: optional feature data must be added via `_optional_datas`
+  in `packaging/openclip.spec` (faster-whisper assets, cv2/data) — package
+  data is NOT auto-collected even when the module is.
+- Frozen whisper needs HF model download on first use (internet once);
+  error path in `WhisperTranscriber.transcribe` explains this.
+- Synth lesson is 320x180@15fps CRF24 by design; tests assert the size.
+- Aligner: rapidfuzz `token_sort_ratio`; marker lines are never spoken —
+  the director planner attaches them to the next aligned spoken line.
+- Director EDL: deterministic JSON (sorted keys, ordered decisions); cuts
+  may only come from the reviewed cut plan; pending decisions block export.
+- Actions YAML: no unquoted colons in step names; actionlint before push;
+  PR-event CI unreliable in this repo — use `gh workflow run ci.yml --ref`.
+- mypy CI job needs `[dev,gui,gaze]` (PySide6/numpy/cv2 stubs).
 
 ## Resume protocol for a new session
 
 1. Read this file top to bottom.
 2. `git status` + `git log --oneline -10` + `gh pr list` + `gh run list`.
-3. Continue from the first unfinished item in "Next steps for the owner".
+3. Continue from the first unfinished item in "Next steps".
 4. Obey AGENTS.md. Update this file before stopping.

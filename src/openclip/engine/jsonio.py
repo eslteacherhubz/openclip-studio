@@ -58,6 +58,15 @@ def as_optional_str(data: object, key: str) -> str | None:
     return value
 
 
+def as_optional_int(data: object, key: str) -> int | None:
+    value = data.get(key, None)  # type: ignore[attr-defined]
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"Expected int or None at {key!r}, got {type(value).__name__}")
+    return int(value)
+
+
 def as_optional_list(data: object, key: str) -> list[Any] | None:
     value = data.get(key, None)  # type: ignore[attr-defined]
     if value is None:

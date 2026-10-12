@@ -80,7 +80,17 @@ class WhisperTranscriber:
             raise RuntimeError(
                 "The 'asr' extra is not installed. Run: pip install eterna-openclip-studio[asr]"
             ) from exc
-        model = WhisperModel(self.model_size, device=self.device, compute_type=self.compute_type)
+        try:
+            model = WhisperModel(
+                self.model_size, device=self.device, compute_type=self.compute_type
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Could not load the local whisper model {self.model_size!r}. "
+                "First use downloads it once (internet needed for that step only); "
+                "afterwards transcription runs fully offline. Check your connection "
+                f"or pick a smaller model. Original error: {exc}"
+            ) from exc
         segments, _info = model.transcribe(
             str(media),
             language=language,
@@ -142,6 +152,10 @@ def align_script(
     lines: list[LineAlignment] = []
 
     for ln in script.lines:
+        if ln.is_marker:
+            # Markers direct compositions but are never spoken; matching them
+            # would consume the next sentence's ASR words and misalign it.
+            continue
         toks = ln.tokens()
         if not toks:
             continue
@@ -194,11 +208,14 @@ def even_alignment(script: LessonScript, duration_s: float) -> Alignment:
     Used when no ASR is available. Times are estimates; silence-based cuts
     are still accurate (they come from the audio, not the script).
     """
-    weights = [max(1, len(ln.tokens())) for ln in script.lines]
+    weights = [
+        max(1, len(ln.tokens())) for ln in script.lines if not ln.is_marker
+    ]
     total_w = sum(weights) or 1
     lines: list[LineAlignment] = []
     t = 0.0
-    for ln, w in zip(script.lines, weights, strict=False):
+    spoken = [ln for ln in script.lines if not ln.is_marker]
+    for ln, w in zip(spoken, weights, strict=False):
         dur = duration_s * (w / total_w)
         lines.append(
             LineAlignment(
