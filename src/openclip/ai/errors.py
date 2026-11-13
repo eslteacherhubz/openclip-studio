@@ -13,3 +13,7 @@ class ProviderConfigError(AIConfigError):
 
 class ProviderNotAvailableError(AIConfigError):
     """A provider is configured but cannot be used right now."""
+
+
+class AIPlanError(AIConfigError):
+    """An AI-generated editing plan is invalid or cannot be parsed."""
