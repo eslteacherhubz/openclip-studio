@@ -17,3 +17,7 @@ class ProviderNotAvailableError(AIConfigError):
 
 class AIPlanError(AIConfigError):
     """An AI-generated editing plan is invalid or cannot be parsed."""
+
+
+class AIRuntimeError(AIConfigError):
+    """A provider request failed at runtime (HTTP error, timeout, bad payload)."""

@@ -17,6 +17,7 @@ their own decision status, not by burn_captions).
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from openclip.director.models import Decision, EditDecisionList, check_invariants
@@ -39,6 +40,11 @@ from openclip.engine.render import (
 )
 
 _UNSUPPORTED = ("diagram_slot", "color_preset", "reframe", "background", "emphasis")
+
+#: AI Director kinds with no render primitive yet. Accepted decisions of these
+#: kinds are SAFELY SKIPPED (logged warning) — the export never crashes on them.
+#: "cut"/"caption"/"callout"/"section_title" rendering is untouched.
+_AI_SKIPPED_KINDS = ("clip", "broll", "zoom", "audio_enhance", "export_config")
 
 _SAFE_MARGIN_V = 140  # callout/title band: below the caption block
 
@@ -188,6 +194,15 @@ def render_edl(
             "Decision kinds without deterministic engine primitives yet: "
             f"{unsupported} (missing components: overlay/colour/reframe "
             "renderers — see docs/PRODUCTION_DIRECTOR.md §8)"
+        )
+    skipped_ai = [d.id for d in accepted if d.kind in _AI_SKIPPED_KINDS]
+    if skipped_ai:
+        logging.getLogger(__name__).warning(
+            "Skipping %d accepted AI decision(s) with no render primitive yet "
+            "(kinds %s): %s — export continues with cut/caption/overlay rendering only",
+            len(skipped_ai),
+            sorted({d.kind for d in accepted if d.kind in _AI_SKIPPED_KINDS}),
+            skipped_ai,
         )
 
     opts = options or RenderOptions()

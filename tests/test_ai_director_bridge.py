@@ -23,12 +23,15 @@ def _plan() -> object:
 class TestDirectorBridge:
     def test_valid_plan_does_not_raise(self) -> None:
         decisions = ai_plan_to_director_decisions(_plan())  # type: ignore[arg-type]
-        assert len(decisions) == 4  # 2 cuts + 2 captions (clips/broll/zooms not mapped yet)
+        # 2 clips + 2 cuts + 2 captions + 1 broll + 1 zoom + audio + export
+        assert len(decisions) == 10
 
     def test_returns_director_decisions(self) -> None:
         decisions = ai_plan_to_director_decisions(_plan())  # type: ignore[arg-type]
         assert all(isinstance(d, Decision) for d in decisions)
-        assert {d.kind for d in decisions} == {"cut", "caption"}
+        assert {d.kind for d in decisions} == {
+            "clip", "cut", "caption", "broll", "zoom", "audio_enhance", "export_config",
+        }
 
     def test_reasons_preserved_in_rationale(self) -> None:
         decisions = ai_plan_to_director_decisions(_plan())  # type: ignore[arg-type]
@@ -57,10 +60,13 @@ class TestDirectorBridge:
         assert first == second
         assert plan.to_json() == before
 
-    def test_stub_contract_clip_broll_zoom_not_mapped(self) -> None:
-        """Documented stub: kinds without a v1 DECISION_KINDS equivalent are skipped."""
+    def test_audio_and_export_mapped(self) -> None:
         decisions = ai_plan_to_director_decisions(_plan())  # type: ignore[arg-type]
-        ids = {d.id for d in decisions}
-        assert "clip-intro" not in ids
-        assert "broll-classroom" not in ids
-        assert "zoom-example" not in ids
+        kinds = {d.kind: d for d in decisions}
+        assert "ai-audio-000" in {d.id for d in decisions}
+        assert "ai-export-000" in {d.id for d in decisions}
+        audio = kinds["audio_enhance"]
+        assert audio.params["denoise"] is True
+        export = kinds["export_config"]
+        assert export.params["format"] == "mp4"
+        assert export.source_span is None  # global, not timeline-bound

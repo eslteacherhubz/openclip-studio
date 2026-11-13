@@ -130,3 +130,52 @@ decisions = ai_plan_to_director_decisions(plan)  # cut/caption → pending direc
 **Rule: real provider output must be normalized through this schema before
 rendering.** No model output reaches FFmpeg except as reviewed, accepted
 decisions. Local-first rendering via FFmpeg remains unchanged.
+
+## Real providers and the prompt-to-plan pipeline
+
+`src/openclip/ai/clients.py` implements BYOK HTTP clients using only the
+standard library (`urllib.request` + `json` — no new dependencies):
+
+- `OpenAICompatibleClient` — works for **OpenAI** (`/v1/chat/completions`,
+  `Authorization: Bearer …`) and **Mistral** (same API shape).
+- `AnthropicClient` — Anthropic messages API (`/v1/messages`, `x-api-key` +
+  `anthropic-version` headers, top-level `system` field).
+
+Both take `base_url`, `api_key`, `model` and `timeout_seconds` from the
+`ProviderConfig`, and raise `AIRuntimeError` on HTTP errors, timeouts,
+invalid JSON responses or missing fields. `create_provider(config)` in
+`src/openclip/ai/providers.py` instantiates the right provider class
+(`local_mock` → `MockAIProvider`). Replicate and ElevenLabs remain stubs
+until their milestone. Tests mock `urllib.request.urlopen` — **no test ever
+makes a real network call**.
+
+`generate_plan(provider, user_prompt, transcript, source_duration_seconds)`
+in `src/openclip/ai/pipeline.py` runs the full pipeline:
+
+1. `build_director_system_prompt()` (`src/openclip/ai/prompts.py`) commands
+   the LLM to act as the "OpenClip AI Director" and output **only** JSON
+   matching the `AIDirectorPlan` schema (a full example is embedded), with
+   all timestamps within `source_duration_seconds`.
+2. The user prompt combines the request, transcript and duration.
+3. `provider.complete(..., response_format="json")` is called; OpenAI-style
+   clients set `response_format: {"type": "json_object"}`.
+4. `extract_json_object()` safely pulls the JSON out of the response —
+   handling ` ```json … ``` ` fences, plain fences, raw JSON, and JSON
+   embedded in prose — raising `AIPlanError` otherwise.
+5. Missing `version`/`provider`/`prompt`/`source_duration_seconds` are filled
+   from known values, then `parse_ai_plan` (strict) and `normalize_ai_plan`
+   (pure) produce the final `AIDirectorPlan`.
+
+## Director extension (safe)
+
+`src/openclip/director/models.py` `DECISION_KINDS` now also includes the AI
+kinds `clip`, `broll`, `zoom`, `audio_enhance`, `export_config`, and
+`ai_plan_to_director_decisions()` maps every plan section to pending
+`Decision`s. `check_invariants` accepts AI-origin overlays without a script
+line (`params["origin"] == "ai"`).
+
+The executor (`src/openclip/director/executor.py`) **safely skips** accepted
+decisions of the new AI kinds with a logged warning — they have no render
+primitive yet — while `cut`/`caption`/`callout`/`section_title` rendering is
+100% untouched, and the legacy unimplemented kinds (`reframe`, …) still raise
+`NotImplementedError` as before. No AI decision is ever auto-accepted.
