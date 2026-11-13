@@ -36,10 +36,16 @@ from openclip.ai.mock import MockAIProvider
 from openclip.ai.pipeline import extract_json_object, generate_plan
 from openclip.ai.prompts import build_director_system_prompt, build_director_user_prompt
 from openclip.ai.providers import AIProvider, create_provider
+from openclip.ai.render_primitives import (
+    DEFAULT_ZOOM_STRENGTH,
+    audio_chain_for_enhancement,
+    build_zoom_vf,
+)
 from openclip.ai.review import AIReviewItem, ReviewStatus, plan_to_review_items
 
 __all__ = [
     "AI_PLAN_SCHEMA_VERSION",
+    "DEFAULT_ZOOM_STRENGTH",
     "PROVIDER_NAMES",
     "AIAudioEnhancement",
     "AIBRoll",
@@ -64,8 +70,10 @@ __all__ = [
     "ProviderNotAvailableError",
     "ReviewStatus",
     "ai_plan_to_director_decisions",
+    "audio_chain_for_enhancement",
     "build_director_system_prompt",
     "build_director_user_prompt",
+    "build_zoom_vf",
     "create_provider",
     "extract_json_object",
     "generate_plan",

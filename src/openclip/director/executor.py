@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from openclip.ai.render_primitives import audio_chain_for_enhancement, build_zoom_vf
 from openclip.director.models import Decision, EditDecisionList, check_invariants
 from openclip.engine.align import Alignment, alignment_from_dict
 from openclip.engine.captions import (
@@ -43,8 +44,9 @@ _UNSUPPORTED = ("diagram_slot", "color_preset", "reframe", "background", "emphas
 
 #: AI Director kinds with no render primitive yet. Accepted decisions of these
 #: kinds are SAFELY SKIPPED (logged warning) — the export never crashes on them.
-#: "cut"/"caption"/"callout"/"section_title" rendering is untouched.
-_AI_SKIPPED_KINDS = ("clip", "broll", "zoom", "audio_enhance", "export_config")
+#: "zoom" (punch-in crop/scale) and "audio_enhance" (denoise/loudnorm) ARE
+#: rendered; "cut"/"caption"/"callout"/"section_title" rendering is untouched.
+_AI_SKIPPED_KINDS = ("clip", "broll", "export_config")
 
 _SAFE_MARGIN_V = 140  # callout/title band: below the caption block
 
@@ -215,8 +217,47 @@ def render_edl(
     )
     kept = kept_intervals_from_spans(cut_spans, media.duration_s)
 
+    # AI zoom decisions: map source-timeline spans to the export timeline and
+    # build deterministic punch-in crop/scale filters.
+    zoom_filters: list[str] = []
+    for d in accepted:
+        if d.kind != "zoom" or d.source_span is None:
+            continue
+        export_span = map_span(d.source_span[0], d.source_span[1], cut_spans)
+        if export_span is None:
+            continue  # zoom fully removed by cuts
+        strength_raw = d.params.get("strength")
+        strength = (
+            float(strength_raw)
+            if isinstance(strength_raw, (int, float)) and not isinstance(strength_raw, bool)
+            else None
+        )
+        zoom_filters.append(
+            build_zoom_vf(
+                export_span,
+                media.width or 1280,
+                media.height or 720,
+                strength,
+                media.fps or 25.0,
+            )
+        )
+
     audio_preset = opts.audio_preset or project.audio_preset
     audio_chain = build_audio_filter(audio_preset) if media.has_audio else None
+    enhance_decisions = [d for d in accepted if d.kind == "audio_enhance"]
+    if enhance_decisions and media.has_audio:
+        last = enhance_decisions[-1]  # deterministic: ordered by span/kind/id
+        chain = audio_chain_for_enhancement(
+            bool(last.params.get("enabled", True)),
+            last.params.get("denoise") if isinstance(last.params.get("denoise"), bool) else None,
+            (
+                last.params.get("loudness_normalize")
+                if isinstance(last.params.get("loudness_normalize"), bool)
+                else None
+            ),
+        )
+        if chain is not None:
+            audio_chain = chain
 
     ass_text = compose_ass(
         project, media, cut_spans, edl, burn_captions=opts.burn_captions
@@ -230,6 +271,7 @@ def render_edl(
         out_path=out_path,
         opts=opts,
         progress=progress,
+        video_filters=zoom_filters or None,
     )
 
 

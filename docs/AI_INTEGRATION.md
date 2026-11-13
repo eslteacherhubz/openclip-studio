@@ -175,7 +175,44 @@ kinds `clip`, `broll`, `zoom`, `audio_enhance`, `export_config`, and
 line (`params["origin"] == "ai"`).
 
 The executor (`src/openclip/director/executor.py`) **safely skips** accepted
-decisions of the new AI kinds with a logged warning — they have no render
-primitive yet — while `cut`/`caption`/`callout`/`section_title` rendering is
-100% untouched, and the legacy unimplemented kinds (`reframe`, …) still raise
-`NotImplementedError` as before. No AI decision is ever auto-accepted.
+decisions of AI kinds that have no render primitive yet (`clip`, `broll`,
+`export_config`) with a logged warning — while `cut`/`caption`/
+`callout`/`section_title` rendering is 100% untouched, and the legacy
+unimplemented kinds (`reframe`, …) still raise `NotImplementedError` as
+before. No AI decision is ever auto-accepted.
+
+## Render primitives (Phase 4)
+
+`src/openclip/ai/render_primitives.py` turns accepted AI decisions into
+deterministic FFmpeg filters, wired into the executor's final pass:
+
+- **`zoom`** → `build_zoom_vf(span, w, h, strength, fps)` builds a `zoompan`
+  punch-in: zoom factor `1/(1-strength)` (strength 0.5 → 2x, default 0.2 →
+  1.25x) active only for the output frames inside the span (mapped to the
+  export timeline through accepted cuts via `map_span`); output resolution is
+  unchanged and frames outside the span are untouched. (FFmpeg's `crop`
+  filter does not support timeline `enable`, hence `zoompan`.)
+- **`audio_enhance`** → `audio_chain_for_enhancement(enabled, denoise,
+  loudness_normalize)` maps the decision flags onto the existing
+  `engine/enhance.py` presets (`afftdn` denoise, `loudnorm` normalization) and
+  replaces the default audio chain when an accepted decision exists.
+
+`render_export()` gained an optional `video_filters` parameter (default
+`None` — existing callers are byte-identical).
+
+## End-to-end CLI: `openclip ai-edit`
+
+```bash
+openclip ai-edit --media lesson.mp4 --prompt "Make a short highlight reel" \
+    --transcript transcript.txt -o out.mp4                  # review JSON to stdout, no render
+openclip ai-edit --media lesson.mp4 --prompt "..." -o out.mp4 \
+    --provider local_mock --auto-accept                     # render the MP4
+```
+
+Flow: probe media → read transcript (optional) → `generate_plan()` →
+review items + director decisions. Without `--auto-accept` the command
+prints the plan plus PENDING review items as JSON and exits **without
+rendering**; with `--auto-accept` every proposal becomes an accepted
+`Decision` and `render_edl` renders the MP4 locally via FFmpeg. Real
+providers need their API key in the environment (BYOK); tests use
+`local_mock` only.

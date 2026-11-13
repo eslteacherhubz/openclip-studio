@@ -58,6 +58,11 @@ openclip probe lesson.mp4            # inspect media
 openclip synth --out demo.mp4        # generate synthetic demo lesson (for testing)
 openclip new --media lesson.mp4 --script script.txt -o project.json
 openclip auto project.json -o out.mp4   # one-shot: align + plan + render
+
+# AI Director (BYOK; defaults to the offline local_mock provider):
+openclip ai-edit --media lesson.mp4 --prompt "Make a short clip about the main topic" \
+    --transcript transcript.txt -o out.mp4                 # prints review JSON, no render
+openclip ai-edit --media lesson.mp4 --prompt "..." -o out.mp4 --auto-accept   # renders MP4
 ```
 
 Desktop app (Windows/Linux; needs the `gui` extra):
