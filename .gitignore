@@ -17,3 +17,7 @@ htmlcov/
 *.wav
 *.m4a
 worktrees/
+
+# Local AI (BYOK) config files — may contain provider settings; keys live in env vars only
+.openclip/ai.json
+.openclip/ai.local.json
