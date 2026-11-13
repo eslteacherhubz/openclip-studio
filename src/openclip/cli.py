@@ -170,6 +170,68 @@ def _cmd_auto(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_ai_edit(args: argparse.Namespace) -> int:
+    from openclip.ai import (
+        ai_plan_to_director_decisions,
+        create_provider,
+        generate_plan,
+        load_provider_config,
+        plan_to_review_items,
+    )
+    from openclip.director.executor import render_edl
+    from openclip.director.models import EditDecisionList
+    from openclip.engine.ffmpeg import probe
+    from openclip.engine.project import Project
+    from openclip.engine.render import RenderOptions
+
+    media = probe(args.media)
+    if args.transcript:
+        transcript = Path(args.transcript).read_text(encoding="utf-8")
+    else:
+        transcript = f"(no transcript provided; source duration {media.duration_s:.1f}s)"
+    config_path = Path(args.config) if args.config else None
+    provider = create_provider(load_provider_config(args.provider, config_path=config_path))
+    plan = generate_plan(provider, args.prompt, transcript, media.duration_s)
+    items = plan_to_review_items(plan)
+    decisions = ai_plan_to_director_decisions(plan)
+
+    if not args.auto_accept:
+        print(
+            json.dumps(
+                {
+                    "provider": plan.provider,
+                    "prompt": plan.prompt,
+                    "plan": plan.to_dict(),
+                    "review": [item.to_dict() for item in items],
+                },
+                indent=2,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
+        print("Review required: re-run with --auto-accept to render.", file=sys.stderr)
+        return 0
+
+    for decision in decisions:
+        decision.status = "accepted"
+    edl = EditDecisionList(project_source=str(media.path), decisions=decisions)
+    project = Project.create(source=media.path, script_text="")
+    result = render_edl(
+        project,
+        media,
+        edl,
+        args.out,
+        RenderOptions(burn_captions=False),
+    )
+    print(
+        f"Exported: {result.out}\n"
+        f"  provider={plan.provider}, decisions={len(decisions)} (all auto-accepted), "
+        f"cuts={result.cuts_applied}, kept {result.kept_duration_s:.2f}s "
+        f"of {media.duration_s:.2f}s"
+    )
+    return 0
+
+
 def _cmd_gui(args: argparse.Namespace) -> int:
     try:
         from openclip.gui.app import main as gui_main
@@ -282,6 +344,25 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--audio-preset", default=None)
     add_transcriber(sp)
     sp.set_defaults(func=_cmd_auto)
+
+    sp = sub.add_parser(
+        "ai-edit",
+        help="AI Director: prompt → plan → review JSON (or render with --auto-accept)",
+    )
+    sp.add_argument("--media", required=True, help="input video file")
+    sp.add_argument("--prompt", required=True, help="natural-language editing request")
+    sp.add_argument("--transcript", default=None, help="optional transcript text file")
+    sp.add_argument("-o", "--out", required=True, help="output .mp4 path")
+    sp.add_argument("--provider", default="local_mock", help="AI provider (default: local_mock)")
+    sp.add_argument(
+        "--config", default=None, help="optional local AI config JSON (never contains the API key)"
+    )
+    sp.add_argument(
+        "--auto-accept",
+        action="store_true",
+        help="accept all AI proposals and render; without it, prints review JSON only",
+    )
+    sp.set_defaults(func=_cmd_ai_edit)
 
     sp = sub.add_parser("gui", help="launch the desktop app (needs the 'gui' extra)")
     sp.add_argument("argv", nargs="*", help="arguments passed to Qt")

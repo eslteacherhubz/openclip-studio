@@ -165,11 +165,14 @@ def render_export(
     out_path: str | Path,
     opts: RenderOptions,
     progress: ProgressFn | None = None,
+    video_filters: list[str] | None = None,
 ) -> RenderResult:
     """Execute kept intervals + one final pass (captions/audio) deterministically.
 
     Shared by `render_project` and the director executor. `ass_text` must
-    already be in export-timeline time.
+    already be in export-timeline time. `video_filters` are extra -vf stages
+    (e.g. AI zoom punch-ins, already in export-timeline time) appended after
+    the caption burn; they force the video re-encode pass.
     """
     out = Path(out_path)
     if out.parent != Path("."):
@@ -182,7 +185,7 @@ def render_export(
         master = workdir / "master.mp4"
         _concat(segments, master, media.has_audio)
 
-        need_video = ass_text is not None
+        need_video = ass_text is not None or bool(video_filters)
         need_audio = audio_chain is not None
         if not need_video and not need_audio:
             shutil.move(str(master), str(out))
@@ -193,6 +196,8 @@ def render_export(
                 ass_path = workdir / "captions.ass"
                 ass_path.write_text(ass_text, encoding="utf-8")
                 vf.append(f"ass=filename='{escape_filter_path(ass_path)}'")
+            if video_filters:
+                vf.extend(video_filters)
             _final_pass(
                 master,
                 out,
