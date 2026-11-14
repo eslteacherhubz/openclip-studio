@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "provider": "local_mock",
+  "prompt": "Turn this 90-second lesson into a 30-second highlight reel with bilingual captions and a zoom on the key example.",
+  "source_duration_seconds": 90.0,
+  "clips": [
+    {
+      "id": "clip-intro",
+      "title": "Welcome and hook",
+      "span": {"start_seconds": 0.0, "end_seconds": 8.0},
+      "reason": "Strong opening line, sets context",
+      "score": 0.9
+    },
+    {
+      "id": "clip-example",
+      "title": "Key example",
+      "span": {"start_seconds": 40.0, "end_seconds": 55.0},
+      "reason": "The core teaching example of the lesson",
+      "score": 0.85
+    }
+  ],
+  "cuts": [
+    {
+      "id": "cut-filler",
+      "span": {"start_seconds": 12.5, "end_seconds": 15.0},
+      "reason": "filler words and pause",
+      "confidence": 0.92
+    },
+    {
+      "id": "cut-tangent",
+      "span": {"start_seconds": 70.0, "end_seconds": 80.0},
+      "reason": "off-topic tangent, not in script",
+      "confidence": 0.7
+    }
+  ],
+  "captions": [
+    {
+      "id": "cap-001",
+      "span": {"start_seconds": 0.0, "end_seconds": 4.0},
+      "primary_text": "Hello everyone, welcome to the lesson.",
+      "support_text": "大家好，欢迎来到课程。",
+      "style": "default"
+    },
+    {
+      "id": "cap-002",
+      "span": {"start_seconds": 40.0, "end_seconds": 45.0},
+      "primary_text": "I go to school every day.",
+      "support_text": "我每天去上学。",
+      "style": "emphasis"
+    }
+  ],
+  "broll": [
+    {
+      "id": "broll-classroom",
+      "span": {"start_seconds": 20.0, "end_seconds": 26.0},
+      "query": "students raising hands in a classroom",
+      "source": "stock",
+      "mode": "cover"
+    }
+  ],
+  "zooms": [
+    {
+      "id": "zoom-example",
+      "span": {"start_seconds": 42.0, "end_seconds": 48.0},
+      "mode": "smooth",
+      "strength": 0.6
+    }
+  ],
+  "audio": {
+    "enabled": true,
+    "denoise": true,
+    "loudness_normalize": true
+  },
+  "export": {
+    "format": "mp4",
+    "width": 1920,
+    "height": 1080,
+    "fps": 30.0,
+    "vertical": false
+  },
+  "notes": [
+    "Highlight reel should stay under 30 seconds of kept content.",
+    "Keep both languages visible in captions."
+  ]
+}

@@ -98,6 +98,78 @@ def test_analysis_populates_cut_table(window) -> None:
     assert window.project.cut_plan.cuts[0].accepted is False
 
 
+def test_ai_review_table_populates_and_toggles(window) -> None:
+    import json
+
+    from PySide6.QtCore import Qt
+
+    from openclip.ai import (
+        MockAIProvider,
+        generate_plan,
+        load_provider_config,
+        plan_to_review_items,
+    )
+
+    provider = MockAIProvider(load_provider_config("local_mock", env={}))
+    plan = generate_plan(provider, "short clip", "transcript", 14.0)
+    window._ai_plan = plan
+    window._refresh_ai_table()
+
+    items = plan_to_review_items(plan)
+    assert window.ai_table.rowCount() == len(items)
+    kinds = {window.ai_table.item(r, 1).text() for r in range(window.ai_table.rowCount())}
+    assert {"clip", "cut", "caption", "zoom", "broll"} <= kinds
+    # every proposal starts PENDING → checkbox checked (proposed accept)
+    assert all(
+        window.ai_table.item(r, 0).checkState() == Qt.CheckState.Checked
+        for r in range(window.ai_table.rowCount())
+    )
+    assert all(window._ai_acceptance())
+
+    # reject the first row; acceptance list must reflect the toggle
+    window.ai_table.item(0, 0).setCheckState(Qt.CheckState.Unchecked)
+    acceptance = window._ai_acceptance()
+    assert acceptance[0] is False
+    assert all(acceptance[1:])
+
+    # decisions built from the plan stay pending until the user renders
+    from openclip.ai import ai_plan_to_director_decisions
+
+    decisions = ai_plan_to_director_decisions(plan)
+    assert all(d.status == "pending" for d in decisions)
+    assert len(decisions) == len(json.loads(json.dumps(plan.to_dict()))["clips"]) + sum(
+        len(plan.to_dict()[k]) for k in ("cuts", "captions", "broll", "zooms")
+    ) + 2  # audio + export
+
+
+def test_ai_panel_has_byok_provider_selector_and_secure_key(window) -> None:
+    from PySide6.QtWidgets import QLineEdit
+
+    from openclip.ai.config import PROVIDER_NAMES
+
+    providers = [window.cmb_ai_provider.itemText(i) for i in range(window.cmb_ai_provider.count())]
+    assert providers == list(PROVIDER_NAMES)
+    for expected in ("local_mock", "openai", "anthropic", "ollama"):
+        assert expected in providers
+    assert window.cmb_ai_provider.currentText() == "local_mock"
+    # API key field masks input (BYOK) and starts empty
+    assert window.edit_ai_key.echoMode() == QLineEdit.EchoMode.Password
+    assert window.edit_ai_key.text() == ""
+
+
+def test_provider_env_overrides_maps_byok_key() -> None:
+    if not _qt_available():
+        pytest.skip("PySide6 (gui extra) not installed")
+    from openclip.gui.workers import provider_env_overrides
+
+    assert provider_env_overrides("openai", None) == {}
+    assert provider_env_overrides("openai", "") == {}
+    assert provider_env_overrides("openai", "sk-abc") == {"OPENAI_API_KEY": "sk-abc"}
+    assert provider_env_overrides("anthropic", "sk-ant") == {"ANTHROPIC_API_KEY": "sk-ant"}
+    assert provider_env_overrides("ollama", "anything") == {}  # local: no key var
+    assert provider_env_overrides("local_mock", "x") == {}
+
+
 def test_gui_entry_declines_without_media() -> None:
     if not _qt_available():
         pytest.skip("PySide6 (gui extra) not installed")
