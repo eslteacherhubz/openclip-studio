@@ -30,6 +30,15 @@ class TestLocalMock:
         assert config.provider == "local_mock"
         assert config.api_key is None
 
+    def test_ollama_is_local_and_needs_no_key(self) -> None:
+        from openclip.ai.config import key_env_var_for
+
+        config = load_provider_config("ollama", env={})
+        assert config.provider == "ollama"
+        assert config.api_key is None
+        assert key_env_var_for("ollama") is None
+        assert key_env_var_for("openai") == "OPENAI_API_KEY"
+
     def test_unknown_provider_raises(self) -> None:
         with pytest.raises(ProviderConfigError):
             load_provider_config("not-a-provider", env={})

@@ -232,6 +232,64 @@ def _cmd_ai_edit(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_ai_edit_transcript(args: argparse.Namespace) -> int:
+    """Transcript-based editing: diff edited transcript vs original → cut EDL → render."""
+    import json as _json
+
+    from openclip.ai.transcript_editing import decisions_to_json, transcript_to_edits
+    from openclip.director.executor import kept_intervals_from_spans, render_edl
+    from openclip.director.models import EditDecisionList
+    from openclip.engine.ffmpeg import probe
+    from openclip.engine.project import Project
+    from openclip.engine.render import RenderOptions, normalize_cut_spans
+
+    media = probe(args.media)
+    try:
+        original_raw = Path(args.original).read_text(encoding="utf-8")
+        original = _json.loads(original_raw)
+    except (OSError, ValueError):
+        original = original_raw  # plain text (no timestamps)
+    edited_raw = Path(args.transcript).read_text(encoding="utf-8")
+    try:
+        edited: object = _json.loads(edited_raw)
+    except ValueError:
+        edited = edited_raw  # plain text
+
+    decisions = transcript_to_edits(original, edited)
+    if not decisions:
+        print("No deleted transcript blocks detected; nothing to cut.")
+        return 0
+    for decision in decisions:
+        decision.status = "accepted"  # the user's edit IS the review decision
+    edl = EditDecisionList(project_source=str(media.path), decisions=decisions)
+
+    spans = [d.source_span for d in decisions if d.source_span is not None]
+    cut_spans = normalize_cut_spans(spans)
+    kept = kept_intervals_from_spans(cut_spans, media.duration_s)
+    if not kept:
+        print(
+            "Error: the edited transcript deletes every timestamped block — "
+            "nothing would remain to render. Aborting without rendering.",
+            file=sys.stderr,
+        )
+        return 2
+
+    if args.dry_run:
+        kept_total = sum(e - s for s, e in kept)
+        print(decisions_to_json(decisions))
+        print(f"Would keep {len(kept)} interval(s), {kept_total:.2f}s", file=sys.stderr)
+        return 0
+
+    project = Project.create(source=media.path, script_text="")
+    result = render_edl(project, media, edl, args.out, RenderOptions(burn_captions=False))
+    print(
+        f"Exported: {result.out}\n"
+        f"  transcript cuts applied: {result.cuts_applied}, "
+        f"kept {result.kept_duration_s:.2f}s of {media.duration_s:.2f}s"
+    )
+    return 0
+
+
 def _cmd_gui(args: argparse.Namespace) -> int:
     try:
         from openclip.gui.app import main as gui_main
@@ -363,6 +421,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="accept all AI proposals and render; without it, prints review JSON only",
     )
     sp.set_defaults(func=_cmd_ai_edit)
+
+    sp = sub.add_parser(
+        "ai-edit-transcript",
+        help="edit video by editing its transcript: diff → cut EDL → render",
+    )
+    sp.add_argument("--media", "--input", dest="media", required=True, help="input video file")
+    sp.add_argument(
+        "--transcript", required=True, help="edited transcript (JSON with segments, or plain text)"
+    )
+    sp.add_argument(
+        "--original", required=True, help="original timestamped transcript (JSON with segments)"
+    )
+    sp.add_argument("-o", "--out", required=True, help="output .mp4 path")
+    sp.add_argument(
+        "--dry-run", action="store_true", help="print the generated EDL JSON without rendering"
+    )
+    sp.set_defaults(func=_cmd_ai_edit_transcript)
 
     sp = sub.add_parser("gui", help="launch the desktop app (needs the 'gui' extra)")
     sp.add_argument("argv", nargs="*", help="arguments passed to Qt")

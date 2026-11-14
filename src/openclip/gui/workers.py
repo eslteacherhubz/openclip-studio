@@ -19,11 +19,23 @@ class AIPlanRequest:
     prompt: str
     transcript: str
     provider: str = "local_mock"
+    api_key: str | None = None  # BYOK: passed via env override, never logged/stored
+
+
+def provider_env_overrides(provider: str, api_key: str | None) -> dict[str, str]:
+    """Map a BYOK key from the UI to the provider's env var (in-memory only)."""
+    if not api_key:
+        return {}
+    from openclip.ai.config import key_env_var_for
+
+    var = key_env_var_for(provider)
+    return {var: api_key} if var else {}
 
 
 class AIPlanWorker(QObject):
-    """Runs the AI prompt-to-plan pipeline off the UI thread (BYOK keys come
-    from the environment via load_provider_config; tests use local_mock)."""
+    """Runs the AI prompt-to-plan pipeline off the UI thread. BYOK: the key
+    from the request is injected as an env override for this call only (never
+    logged, never persisted); tests use local_mock with no key."""
 
     finished = Signal(object)  # AIDirectorPlan
     failed = Signal(str)
@@ -34,10 +46,16 @@ class AIPlanWorker(QObject):
 
     def run(self) -> None:  # slot, executed on the worker thread
         try:
+            import os
+
             from openclip.ai import create_provider, generate_plan, load_provider_config
 
+            env: dict[str, str] | None = None
+            overrides = provider_env_overrides(self._request.provider, self._request.api_key)
+            if overrides:
+                env = {**os.environ, **overrides}
             media = probe(self._request.media_path)
-            provider = create_provider(load_provider_config(self._request.provider))
+            provider = create_provider(load_provider_config(self._request.provider, env=env))
             plan = generate_plan(
                 provider,
                 self._request.prompt,

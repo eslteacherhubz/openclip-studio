@@ -26,6 +26,7 @@ ProviderName = Literal[
     "anthropic",
     "replicate",
     "elevenlabs",
+    "ollama",
     "local_mock",
 ]
 
@@ -35,6 +36,7 @@ PROVIDER_NAMES: tuple[str, ...] = (
     "anthropic",
     "replicate",
     "elevenlabs",
+    "ollama",
     "local_mock",
 )
 
@@ -53,6 +55,14 @@ GENERIC_ENV_VARS: dict[str, str] = {
     "base_url": "OPENCLIP_AI_BASE_URL",
     "model": "OPENCLIP_AI_MODEL",
 }
+
+#: Providers that run locally and need no API key (e.g. ollama on localhost).
+KEY_OPTIONAL_PROVIDERS = frozenset({"ollama", "local_mock"})
+
+
+def key_env_var_for(provider: str) -> str | None:
+    """The environment variable that carries this provider's API key, if any."""
+    return PROVIDER_KEY_ENV_VARS.get(provider)
 
 DEFAULT_TIMEOUT_SECONDS = 30.0
 
@@ -152,7 +162,7 @@ def load_provider_config(
         return None
 
     api_key: str | None = None
-    if provider != "local_mock":
+    if provider not in KEY_OPTIONAL_PROVIDERS:
         key_env = PROVIDER_KEY_ENV_VARS[provider]
         api_key = environ.get(key_env) or environ.get(GENERIC_ENV_VARS["api_key"]) or None
         if not api_key:

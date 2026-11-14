@@ -142,6 +142,34 @@ def test_ai_review_table_populates_and_toggles(window) -> None:
     ) + 2  # audio + export
 
 
+def test_ai_panel_has_byok_provider_selector_and_secure_key(window) -> None:
+    from PySide6.QtWidgets import QLineEdit
+
+    from openclip.ai.config import PROVIDER_NAMES
+
+    providers = [window.cmb_ai_provider.itemText(i) for i in range(window.cmb_ai_provider.count())]
+    assert providers == list(PROVIDER_NAMES)
+    for expected in ("local_mock", "openai", "anthropic", "ollama"):
+        assert expected in providers
+    assert window.cmb_ai_provider.currentText() == "local_mock"
+    # API key field masks input (BYOK) and starts empty
+    assert window.edit_ai_key.echoMode() == QLineEdit.EchoMode.Password
+    assert window.edit_ai_key.text() == ""
+
+
+def test_provider_env_overrides_maps_byok_key() -> None:
+    if not _qt_available():
+        pytest.skip("PySide6 (gui extra) not installed")
+    from openclip.gui.workers import provider_env_overrides
+
+    assert provider_env_overrides("openai", None) == {}
+    assert provider_env_overrides("openai", "") == {}
+    assert provider_env_overrides("openai", "sk-abc") == {"OPENAI_API_KEY": "sk-abc"}
+    assert provider_env_overrides("anthropic", "sk-ant") == {"ANTHROPIC_API_KEY": "sk-ant"}
+    assert provider_env_overrides("ollama", "anything") == {}  # local: no key var
+    assert provider_env_overrides("local_mock", "x") == {}
+
+
 def test_gui_entry_declines_without_media() -> None:
     if not _qt_available():
         pytest.skip("PySide6 (gui extra) not installed")

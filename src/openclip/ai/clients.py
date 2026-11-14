@@ -19,13 +19,18 @@ DEFAULT_BASE_URLS: dict[str, str] = {
     "openai": "https://api.openai.com/v1",
     "mistral": "https://api.mistral.ai/v1",
     "anthropic": "https://api.anthropic.ai",
+    "ollama": "http://localhost:11434/v1",
 }
 
 DEFAULT_MODELS: dict[str, str] = {
     "openai": "gpt-4o-mini",
     "mistral": "mistral-large-latest",
     "anthropic": "claude-sonnet-4-5",
+    "ollama": "llama3.2",
 }
+
+#: Providers that may run without an API key (local servers).
+_KEY_OPTIONAL = frozenset({"ollama", "local_mock"})
 
 ANTHROPIC_VERSION = "2023-06-01"
 DEFAULT_MAX_TOKENS = 8192
@@ -75,7 +80,7 @@ class OpenAICompatibleClient:
     """Chat-completions client for OpenAI and Mistral (same API shape)."""
 
     def __init__(self, config: ProviderConfig) -> None:
-        if not config.api_key:
+        if not config.api_key and config.provider not in _KEY_OPTIONAL:
             raise AIRuntimeError(f"Provider {config.provider!r} has no API key configured")
         self._config = config
         self._base_url = (config.base_url or DEFAULT_BASE_URLS.get(config.provider, "")).rstrip("/")
@@ -103,10 +108,9 @@ class OpenAICompatibleClient:
         body: dict[str, Any] = {"model": self._model, "messages": messages}
         if response_format == "json":
             body["response_format"] = {"type": "json_object"}
-        headers = {
-            "Authorization": f"Bearer {self._config.api_key}",
-            "Content-Type": "application/json",
-        }
+        headers = {"Content-Type": "application/json"}
+        if self._config.api_key:
+            headers["Authorization"] = f"Bearer {self._config.api_key}"
         payload = _post_json(f"{self._base_url}/chat/completions", headers, body, self._timeout)
         return _require_str(payload, "choices.0.message.content")
 
@@ -115,7 +119,7 @@ class AnthropicClient:
     """Messages-API client for Anthropic."""
 
     def __init__(self, config: ProviderConfig) -> None:
-        if not config.api_key:
+        if not config.api_key and config.provider not in _KEY_OPTIONAL:
             raise AIRuntimeError(f"Provider {config.provider!r} has no API key configured")
         self._config = config
         self._base_url = (config.base_url or DEFAULT_BASE_URLS.get(config.provider, "")).rstrip("/")

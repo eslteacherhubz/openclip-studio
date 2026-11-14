@@ -132,6 +132,7 @@ _PROVIDER_CLASSES: dict[str, Callable[[ProviderConfig], AIProvider]] = {
     "anthropic": AnthropicProvider,
     "replicate": ReplicateProvider,
     "elevenlabs": ElevenLabsProvider,
+    "ollama": OpenAIProvider,  # local, OpenAI-compatible API, no key required
     "local_mock": MockAIProvider,
 }
 

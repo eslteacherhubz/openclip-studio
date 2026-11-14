@@ -46,6 +46,12 @@ from openclip.ai.render_primitives import (
     build_zoom_vf,
 )
 from openclip.ai.review import AIReviewItem, ReviewStatus, plan_to_review_items
+from openclip.ai.transcript_editing import (
+    TranscriptSegment,
+    decisions_to_json,
+    parse_transcript,
+    transcript_to_edits,
+)
 
 __all__ = [
     "AI_PLAN_SCHEMA_VERSION",
@@ -74,6 +80,7 @@ __all__ = [
     "ProviderName",
     "ProviderNotAvailableError",
     "ReviewStatus",
+    "TranscriptSegment",
     "ai_plan_to_director_decisions",
     "audio_chain_for_enhancement",
     "build_broll_filter",
@@ -83,11 +90,14 @@ __all__ = [
     "build_export_vf",
     "build_zoom_vf",
     "create_provider",
+    "decisions_to_json",
     "extract_json_object",
     "generate_plan",
     "load_provider_config",
     "normalize_ai_plan",
     "parse_ai_plan",
     "parse_ai_plan_json",
+    "parse_transcript",
     "plan_to_review_items",
+    "transcript_to_edits",
 ]

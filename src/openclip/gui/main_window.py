@@ -155,6 +155,27 @@ class MainWindow(QMainWindow):
             "Natural-language request, e.g. 'Make a short clip about the main topic'"
         )
         layout.addWidget(self.edit_ai_prompt)
+
+        # BYOK: provider selector + secure (password-masked) API key field.
+        # The key is passed in-memory to the worker only — never logged/saved.
+        prov_row = QHBoxLayout()
+        self.cmb_ai_provider = QComboBox()
+        from openclip.ai.config import PROVIDER_NAMES
+
+        for name in PROVIDER_NAMES:
+            self.cmb_ai_provider.addItem(name)
+        self.cmb_ai_provider.setCurrentText("local_mock")
+        prov_row.addWidget(QLabel("Provider:"))
+        prov_row.addWidget(self.cmb_ai_provider, 1)
+        layout.addLayout(prov_row)
+        key_row = QHBoxLayout()
+        self.edit_ai_key = QLineEdit()
+        self.edit_ai_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.edit_ai_key.setPlaceholderText("API key (BYOK, optional — env vars also work)")
+        key_row.addWidget(QLabel("API key:"))
+        key_row.addWidget(self.edit_ai_key, 1)
+        layout.addLayout(key_row)
+
         btn_row = QHBoxLayout()
         self.btn_ai_plan = QPushButton("AI Plan…")
         self.btn_ai_render = QPushButton("Accept && Render AI…")
@@ -169,7 +190,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.ai_table)
         note = QLabel(
             "Checked rows are accepted and rendered; unchecked rows are rejected. "
-            "Provider defaults to local_mock (offline); real providers use BYOK env keys."
+            "Provider defaults to local_mock (offline); pick a real provider and "
+            "paste its API key (BYOK) or set the env var."
         )
         note.setWordWrap(True)
         layout.addWidget(note)
@@ -490,7 +512,8 @@ class MainWindow(QMainWindow):
                 media_path=self.media.path,
                 prompt=prompt,
                 transcript=self.script_edit.toPlainText(),
-                provider="local_mock",
+                provider=self.cmb_ai_provider.currentText(),
+                api_key=self.edit_ai_key.text().strip() or None,
             )
         )
         worker.finished.connect(self._on_ai_plan_done)
