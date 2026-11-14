@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl, Signal
@@ -36,6 +37,10 @@ from openclip.engine.ffmpeg import MediaInfo, probe
 from openclip.engine.pipeline import available_transcribers
 from openclip.engine.project import Project
 from openclip.gui.workers import (
+    AIPlanRequest,
+    AIPlanWorker,
+    AIRenderRequest,
+    AIRenderWorker,
     AnalysisRequest,
     AnalysisWorker,
     RenderRequest,
@@ -67,6 +72,11 @@ class MainWindow(QMainWindow):
         self._project_path: Path | None = None
         self._analysis_runner = ThreadedRunner()
         self._render_runner = ThreadedRunner()
+        self._ai_plan_runner = ThreadedRunner()
+        self._ai_render_runner = ThreadedRunner()
+        self._ai_plan: object | None = None  # AIDirectorPlan
+        self._original_transcript: object | None = None  # parsed transcript JSON/text
+        self._transcript_decisions: list[object] = []  # Decision list from the diff
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -79,8 +89,10 @@ class MainWindow(QMainWindow):
 
         splitter.addWidget(self._build_script_panel())
         splitter.addWidget(self._build_review_panel())
+        splitter.addWidget(self._build_transcript_panel())
+        splitter.addWidget(self._build_ai_panel())
         splitter.addWidget(self._build_settings_panel())
-        splitter.setSizes([380, 420, 260])
+        splitter.setSizes([300, 320, 280, 300, 240])
 
         root.addWidget(self._build_player_bar())
         self.setStatusBar(QStatusBar())
@@ -137,6 +149,100 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.cut_table)
         note = QLabel("Uncheck a row to KEEP that span; checked rows are removed.")
         layout.addWidget(note)
+        return box
+
+    def _build_transcript_panel(self) -> QWidget:
+        box = QGroupBox("Transcript editing (edit text → propose cuts)")
+        layout = QVBoxLayout(box)
+        self.transcript_edit = QPlainTextEdit()
+        self.transcript_edit.setPlaceholderText(
+            "Original transcript text. Load a timestamped transcript JSON, or edit "
+            "the script-derived text here, then Apply Transcript Edits."
+        )
+        layout.addWidget(self.transcript_edit)
+        btn_row = QHBoxLayout()
+        self.btn_load_transcript = QPushButton("Load transcript…")
+        self.btn_apply_transcript = QPushButton("Apply Transcript Edits")
+        btn_row.addWidget(self.btn_load_transcript)
+        btn_row.addWidget(self.btn_apply_transcript)
+        layout.addLayout(btn_row)
+        hint = QLabel(
+            "Deleted blocks become proposed cuts, shown in the AI Director panel "
+            "for review before rendering."
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        self.btn_load_transcript.clicked.connect(self.load_transcript)
+        self.btn_apply_transcript.clicked.connect(self.apply_transcript_edits)
+        self.btn_load_transcript.setEnabled(False)
+        self.btn_apply_transcript.setEnabled(False)
+        return box
+
+    def _build_ai_panel(self) -> QWidget:
+        box = QGroupBox("AI Director proposals (review before render)")
+        layout = QVBoxLayout(box)
+        self.edit_ai_prompt = QLineEdit()
+        self.edit_ai_prompt.setPlaceholderText(
+            "Natural-language request, e.g. 'Make a short clip about the main topic'"
+        )
+        layout.addWidget(self.edit_ai_prompt)
+
+        # BYOK: provider selector + secure (password-masked) API key field.
+        # The key is passed in-memory to the worker only — never logged/saved.
+        prov_row = QHBoxLayout()
+        self.cmb_ai_provider = QComboBox()
+        from openclip.ai.config import PROVIDER_NAMES
+
+        for name in PROVIDER_NAMES:
+            self.cmb_ai_provider.addItem(name)
+        self.cmb_ai_provider.setCurrentText("local_mock")
+        prov_row.addWidget(QLabel("Provider:"))
+        prov_row.addWidget(self.cmb_ai_provider, 1)
+        layout.addLayout(prov_row)
+        key_row = QHBoxLayout()
+        self.edit_ai_key = QLineEdit()
+        self.edit_ai_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.edit_ai_key.setPlaceholderText("API key (BYOK, optional — env vars also work)")
+        key_row.addWidget(QLabel("API key:"))
+        key_row.addWidget(self.edit_ai_key, 1)
+        layout.addLayout(key_row)
+
+        btn_row = QHBoxLayout()
+        self.btn_ai_plan = QPushButton("AI Plan…")
+        self.btn_ai_render = QPushButton("Accept && Render AI…")
+        btn_row.addWidget(self.btn_ai_plan)
+        btn_row.addWidget(self.btn_ai_render)
+        layout.addLayout(btn_row)
+        self.ai_table = QTableWidget(0, 5)
+        self.ai_table.setHorizontalHeaderLabels(
+            ["Accept?", "Kind", "Start (s)", "End (s)", "Reason"]
+        )
+        self.ai_table.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(self.ai_table)
+        cap_row = QHBoxLayout()
+        self.chk_ai_captions = QCheckBox("Burn transcript captions (bilingual)")
+        self.chk_ai_captions.setChecked(True)
+        cap_row.addWidget(self.chk_ai_captions)
+        self.cmb_caption_style = QComboBox()
+        from openclip.ai.render_primitives import STYLE_TEMPLATES
+
+        for name in STYLE_TEMPLATES:
+            self.cmb_caption_style.addItem(name)
+        self.cmb_caption_style.setCurrentText("Classic")
+        cap_row.addWidget(QLabel("Caption style:"))
+        cap_row.addWidget(self.cmb_caption_style, 1)
+        layout.addLayout(cap_row)
+        note = QLabel(
+            "Checked rows are accepted and rendered; unchecked rows are rejected. "
+            "Provider defaults to local_mock (offline); pick a real provider and "
+            "paste its API key (BYOK) or set the env var."
+        )
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        self.btn_ai_plan.clicked.connect(self.ai_plan)
+        self.btn_ai_render.clicked.connect(self.ai_render)
+        self.btn_ai_plan.setEnabled(False)
+        self.btn_ai_render.setEnabled(False)
         return box
 
     def _build_settings_panel(self) -> QWidget:
@@ -220,9 +326,7 @@ class MainWindow(QMainWindow):
         )
 
     def open_project(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Open project", "", "OpenClip project (*.json)"
-        )
+        path, _ = QFileDialog.getOpenFileName(self, "Open project", "", "OpenClip project (*.json)")
         if not path:
             return
         try:
@@ -260,13 +364,25 @@ class MainWindow(QMainWindow):
         self.project.audio_preset = self.cmb_audio.currentText()
         self.project.captions.animation = self.cmb_animation.currentText()
         self.project.captions.karaoke = self.chk_karaoke.isChecked()
-        self.media_label.setText(
-            f"{Path(self.project.source).name} — {self.media.duration_s:.1f}s"
-        )
+        self.media_label.setText(f"{Path(self.project.source).name} — {self.media.duration_s:.1f}s")
         self.player.setSource(QUrl.fromLocalFile(str(self.project.source)))
         self.slider.setRange(0, int(self.media.duration_s * 1000))
-        for btn in (self.btn_save, self.btn_analyze, self.btn_export):
+        for btn in (
+            self.btn_save,
+            self.btn_analyze,
+            self.btn_export,
+            self.btn_ai_plan,
+            self.btn_load_transcript,
+            self.btn_apply_transcript,
+        ):
             btn.setEnabled(True)
+        if self.project.script.lines:
+            self.transcript_edit.setPlainText(
+                "\n\n".join(
+                    f"{ln.primary} :: {ln.support}" if ln.support else ln.primary
+                    for ln in self.project.script.lines
+                )
+            )
 
     # ---------- analysis / review / export ----------
 
@@ -351,9 +467,7 @@ class MainWindow(QMainWindow):
             if box is None or self.project.cut_plan is None:
                 continue
             # Unchecked = cut applied (removed). Checked = keep span.
-            self.project.cut_plan.cuts[row].accepted = (
-                box.checkState() == Qt.CheckState.Unchecked
-            )
+            self.project.cut_plan.cuts[row].accepted = box.checkState() == Qt.CheckState.Unchecked
 
     def _jump_to_cut(self, row: int, _col: int) -> None:
         assert self.project is not None and self.project.cut_plan is not None
@@ -367,14 +481,10 @@ class MainWindow(QMainWindow):
         if self.project is None or self.media is None or self._render_runner.busy:
             return
         if self.project.alignment is None:
-            QMessageBox.information(
-                self, "OpenClip", "Run Analyze first so the cut plan exists."
-            )
+            QMessageBox.information(self, "OpenClip", "Run Analyze first so the cut plan exists.")
             return
         self._cut_acceptance_from_table()
-        out, _ = QFileDialog.getSaveFileName(
-            self, "Export MP4", "lesson-edited.mp4", "MP4 (*.mp4)"
-        )
+        out, _ = QFileDialog.getSaveFileName(self, "Export MP4", "lesson-edited.mp4", "MP4 (*.mp4)")
         if not out:
             return
         try:
@@ -432,6 +542,215 @@ class MainWindow(QMainWindow):
         if hasattr(self, "progress"):
             self.statusBar().removeWidget(self.progress)
             self.progress = None  # type: ignore[assignment]
+
+    # ---------- transcript editing ----------
+
+    def load_transcript(self) -> None:
+        """Load a timestamped transcript (JSON) or plain text into the editor."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open transcript", "", "Transcript (*.json *.txt);;All files (*)"
+        )
+        if not path:
+            return
+        from openclip.ai import parse_transcript
+
+        raw = Path(path).read_text(encoding="utf-8")
+        try:
+            data: object = json.loads(raw)
+        except ValueError:
+            data = raw
+        self._original_transcript = data
+        segments = parse_transcript(data)
+        self.transcript_edit.setPlainText("\n\n".join(s.text for s in segments if s.text.strip()))
+        self.statusBar().showMessage(f"Loaded transcript {Path(path).name}: {len(segments)} blocks")
+
+    def apply_transcript_edits(self) -> None:
+        """Diff the edited transcript against the original → proposed cut decisions.
+
+        The cuts are fed into the AI Director review panel (as a plan whose
+        only content is the transcript cuts), so the user sees exactly what
+        will be removed before rendering.
+        """
+        from openclip.ai import AICaption, AICut, AIDirectorPlan, AISpan, transcript_to_edits
+        from openclip.director.models import Decision
+
+        original = self._original_transcript
+        if original is None:
+            # fall back to the script text (no timestamps → warnings, no cuts)
+            blocks = [b.strip() for b in self.script_edit.toPlainText().split("\n\n") if b.strip()]
+            original = {"segments": [{"text": b} for b in blocks]}
+        edited = self.transcript_edit.toPlainText()
+        decisions = transcript_to_edits(original, edited, include_captions=True)
+        self._transcript_decisions = list(decisions)
+
+        cuts: list[AICut] = []
+        captions: list[AICaption] = []
+        for d in decisions:
+            assert isinstance(d, Decision)
+            if d.source_span is None:
+                continue
+            span = AISpan(d.source_span[0], d.source_span[1])
+            if d.kind == "cut":
+                cuts.append(AICut(span=span, id=d.id, reason=d.rationale, extra=dict(d.params)))
+            elif d.kind == "caption":
+                captions.append(
+                    AICaption(
+                        span=span,
+                        id=d.id,
+                        primary_text=str(d.params.get("primary") or ""),
+                        support_text=(
+                            str(d.params["support"]) if d.params.get("support") else None
+                        ),
+                        extra=dict(d.params),
+                    )
+                )
+        self._ai_plan = AIDirectorPlan(
+            version=1,
+            provider="transcript_edit",
+            prompt="Transcript edits (user-deleted blocks)",
+            cuts=cuts,
+            captions=captions,
+        )
+        self._refresh_ai_table()
+        self.btn_ai_render.setEnabled(bool(cuts or captions))
+        self.statusBar().showMessage(
+            f"Transcript edits: {len(cuts)} cut(s), {len(captions)} caption(s) "
+            "proposed — review in the AI panel.",
+            10000,
+        )
+
+    # ---------- AI Director: plan → review → render ----------
+
+    def ai_plan(self) -> None:
+        """Run the AI pipeline for the current media + prompt (background thread)."""
+        if self.media is None or self._ai_plan_runner.busy:
+            return
+        prompt = self.edit_ai_prompt.text().strip()
+        if not prompt:
+            QMessageBox.information(self, "AI Director", "Enter an editing prompt first.")
+            return
+        self.btn_ai_plan.setEnabled(False)
+        self.statusBar().showMessage("AI planning (local_mock, offline)…")
+        worker = AIPlanWorker(
+            AIPlanRequest(
+                media_path=self.media.path,
+                prompt=prompt,
+                transcript=self.script_edit.toPlainText(),
+                provider=self.cmb_ai_provider.currentText(),
+                api_key=self.edit_ai_key.text().strip() or None,
+            )
+        )
+        worker.finished.connect(self._on_ai_plan_done)
+        worker.failed.connect(self._on_ai_plan_failed)
+        self._ai_plan_runner.start(worker)
+
+    def _on_ai_plan_done(self, plan: object) -> None:
+        from openclip.ai import AIDirectorPlan
+
+        assert isinstance(plan, AIDirectorPlan)
+        self._ai_plan = plan
+        self._refresh_ai_table()
+        self.btn_ai_plan.setEnabled(True)
+        self.btn_ai_render.setEnabled(True)
+        self.statusBar().showMessage(
+            f"AI plan ready: {len(plan.clips)} clips, {len(plan.cuts)} cuts, "
+            f"{len(plan.zooms)} zooms, {len(plan.broll)} b-roll — review below."
+        )
+
+    def _on_ai_plan_failed(self, message: str) -> None:
+        self.btn_ai_plan.setEnabled(True)
+        QMessageBox.critical(self, "AI Director", f"AI planning failed:\n{message}")
+
+    def _refresh_ai_table(self) -> None:
+        from openclip.ai import plan_to_review_items
+
+        self.ai_table.setRowCount(0)
+        if self._ai_plan is None:
+            return
+        for row, item in enumerate(plan_to_review_items(self._ai_plan)):  # type: ignore[arg-type]
+            self.ai_table.insertRow(row)
+            box = QTableWidgetItem()
+            box.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+            box.setCheckState(Qt.CheckState.Checked)  # PENDING → proposed accept
+            self.ai_table.setItem(row, 0, box)
+            start = f"{item.start_seconds:.2f}"
+            end = f"{item.end_seconds:.2f}"
+            for col, text in enumerate((item.kind, start, end, item.reason), start=1):
+                cell = QTableWidgetItem(text)
+                cell.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                self.ai_table.setItem(row, col, cell)
+
+    def _ai_acceptance(self) -> list[bool]:
+        return [
+            (self.ai_table.item(row, 0) is not None)
+            and self.ai_table.item(row, 0).checkState() == Qt.CheckState.Checked
+            for row in range(self.ai_table.rowCount())
+        ]
+
+    def ai_render(self) -> None:
+        """Render only the accepted AI review items through the director EDL."""
+        if self.media is None or self._ai_plan is None or self._ai_render_runner.busy:
+            return
+        if self.ai_table.rowCount() == 0:
+            QMessageBox.information(self, "AI Director", "Run AI Plan… first.")
+            return
+        out, _ = QFileDialog.getSaveFileName(
+            self, "Export AI-edited MP4", "lesson-ai.mp4", "MP4 (*.mp4)"
+        )
+        if not out:
+            return
+        from openclip.ai import ai_plan_to_director_decisions, plan_to_review_items
+        from openclip.director.models import EditDecisionList
+
+        plan = self._ai_plan
+        items = plan_to_review_items(plan)  # type: ignore[arg-type]
+        accepted_ids = {
+            item.id for item, ok in zip(items, self._ai_acceptance(), strict=True) if ok
+        }
+        decisions = ai_plan_to_director_decisions(plan)  # type: ignore[arg-type]
+        for decision in decisions:
+            decision.status = "accepted" if decision.id in accepted_ids else "rejected"
+        project = self.project or Project.create(source=self.media.path, script_text="")
+        edl = EditDecisionList(project_source=str(self.media.path), decisions=decisions)
+        self.btn_ai_render.setEnabled(False)
+        self.statusBar().showMessage("Rendering AI plan…")
+        try:
+            crf = int(self.edit_crf.text())
+        except ValueError:
+            crf = 20
+        worker = AIRenderWorker(
+            AIRenderRequest(
+                project=project,
+                media=self.media,
+                edl=edl,
+                out_path=Path(out),
+                burn_captions=self.chk_captions.isChecked(),
+                crf=crf,
+                transcript_captions=self.chk_ai_captions.isChecked(),
+                caption_style=self.cmb_caption_style.currentText() or None,
+            )
+        )
+        worker.progress.connect(self._on_render_progress)
+        worker.finished.connect(lambda res: self._on_ai_render_done(out, res))
+        worker.failed.connect(self._on_ai_render_failed)
+        self._ai_render_runner.start(worker)
+
+    def _on_ai_render_done(self, out_path: str, result: object) -> None:
+        self._finish_progress()
+        self.btn_ai_render.setEnabled(True)
+        QMessageBox.information(
+            self,
+            "AI export complete",
+            f"Exported to:\n{out_path}\n\n"
+            f"Kept {getattr(result, 'kept_duration_s', 0):.1f}s, "
+            f"{getattr(result, 'cuts_applied', 0)} cuts applied.",
+        )
+        self.statusBar().showMessage(f"Exported {out_path}", 10000)
+
+    def _on_ai_render_failed(self, message: str) -> None:
+        self._finish_progress()
+        self.btn_ai_render.setEnabled(True)
+        QMessageBox.critical(self, "AI Director", f"AI render failed:\n{message}")
 
     # ---------- playback ----------
 

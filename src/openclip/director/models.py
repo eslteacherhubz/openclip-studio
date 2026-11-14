@@ -27,6 +27,14 @@ DECISION_KINDS = (
     "reframe",  # presenter auto-framing (v2)
     "background",  # background replacement (v3)
     "emphasis",  # karaoke-highlight of a target term (v2)
+    # AI Director kinds (proposed by the AI layer, review-gated like the rest).
+    # They have no deterministic render primitive yet: the executor safely
+    # skips them (with a warning) instead of crashing the export.
+    "clip",  # AI-proposed highlight clip to keep
+    "broll",  # AI-proposed B-roll insert
+    "zoom",  # AI-proposed zoom/reframe moment
+    "audio_enhance",  # AI-proposed audio enhancement settings
+    "export_config",  # AI-proposed export settings
 )
 
 STATUSES = ("pending", "accepted", "rejected")
@@ -167,7 +175,14 @@ def check_invariants(edl: EditDecisionList) -> list[str]:
             if not d.rationale.strip():
                 problems.append(f"{d.id}: cut without rationale (not inspectable)")
         overlay_kinds = ("caption", "callout", "section_title", "diagram_slot", "emphasis")
-        if d.kind in overlay_kinds and d.source_line is None:
+        # AI/transcript-proposed items (params["origin"] in {"ai",
+        # "transcript_edit"}) are justified by the plan/diff rationale
+        # instead of a script line.
+        if (
+            d.kind in overlay_kinds
+            and d.source_line is None
+            and d.params.get("origin") not in ("ai", "transcript_edit")
+        ):
             problems.append(f"{d.id}: {d.kind} not tied to a script line")
     return problems
 

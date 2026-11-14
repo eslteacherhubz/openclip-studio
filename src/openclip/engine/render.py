@@ -42,6 +42,8 @@ class RenderOptions:
     burn_captions: bool = True
     audio_preset: str | None = None  # None → use project.audio_preset
     keep_workdir: bool = False
+    transcript_captions: bool = False  # burn AI/transcript caption drawtext chain
+    caption_style: str | None = None  # STYLE_TEMPLATES name (None → Classic)
 
 
 @dataclass
@@ -52,6 +54,26 @@ class RenderResult:
     cuts_applied: int
     captions_burned: bool
     audio_enhanced: bool
+
+
+@dataclass
+class BrollOverlay:
+    """One B-roll layer for the final pass.
+
+    ``start_s``/``end_s`` are in export-timeline time. ``segment`` is the
+    prebuilt filter_complex fragment (see
+    :func:`openclip.ai.render_primitives.build_broll_filter`) and ``out_label``
+    the label it outputs; the render assembles ``[0:v]…[base0]; <segment>; …``.
+    """
+
+    asset: Path
+    start_s: float
+    end_s: float
+    segment: str
+    out_label: str
+
+
+_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 
 
 def normalize_cut_spans(
@@ -165,11 +187,19 @@ def render_export(
     out_path: str | Path,
     opts: RenderOptions,
     progress: ProgressFn | None = None,
+    video_filters: list[str] | None = None,
+    broll: list[BrollOverlay] | None = None,
+    out_fps: float | None = None,
+    caption_filter: str | None = None,
 ) -> RenderResult:
     """Execute kept intervals + one final pass (captions/audio) deterministically.
 
     Shared by `render_project` and the director executor. `ass_text` must
-    already be in export-timeline time.
+    already be in export-timeline time. `video_filters` are extra -vf stages
+    (e.g. AI zoom punch-ins, already in export-timeline time) appended after
+    the caption burn; they force the video re-encode pass. `broll` overlays
+    extra assets via filter_complex (image assets are looped); `out_fps` sets
+    the output frame rate (`-r`) on the final pass.
     """
     out = Path(out_path)
     if out.parent != Path("."):
@@ -182,9 +212,11 @@ def render_export(
         master = workdir / "master.mp4"
         _concat(segments, master, media.has_audio)
 
-        need_video = ass_text is not None
+        need_video = (
+            ass_text is not None or bool(video_filters) or bool(broll) or caption_filter is not None
+        )
         need_audio = audio_chain is not None
-        if not need_video and not need_audio:
+        if not need_video and not need_audio and out_fps is None:
             shutil.move(str(master), str(out))
             captions_burned = False
         else:
@@ -193,6 +225,8 @@ def render_export(
                 ass_path = workdir / "captions.ass"
                 ass_path.write_text(ass_text, encoding="utf-8")
                 vf.append(f"ass=filename='{escape_filter_path(ass_path)}'")
+            if video_filters:
+                vf.extend(video_filters)
             _final_pass(
                 master,
                 out,
@@ -201,6 +235,9 @@ def render_export(
                 crf=opts.crf,
                 preset=opts.x264_preset,
                 has_audio=media.has_audio,
+                broll=broll,
+                out_fps=out_fps,
+                caption_filter=caption_filter,
             )
             captions_burned = True
         return RenderResult(
@@ -297,9 +334,7 @@ def _render_segments(
 
 def _concat(segments: list[Path], master: Path, has_audio: bool) -> None:
     listing = master.parent / "concat.txt"
-    listing.write_text(
-        "\n".join(f"file '{s!s}'" for s in segments), encoding="utf-8"
-    )
+    listing.write_text("\n".join(f"file '{s!s}'" for s in segments), encoding="utf-8")
     run_ffmpeg(
         ["-y", "-f", "concat", "-safe", "0", "-i", str(listing), "-c", "copy", str(master)],
         timeout=600,
@@ -314,10 +349,46 @@ def _final_pass(
     crf: int,
     preset: str,
     has_audio: bool,
+    broll: list[BrollOverlay] | None = None,
+    out_fps: float | None = None,
+    caption_filter: str | None = None,
 ) -> None:
     args = ["-y", "-i", str(master)]
-    if vf_graph:
-        args += ["-vf", vf_graph]
+    overlays = list(broll or [])
+    for b in overlays:
+        if b.asset.suffix.lower() in _IMAGE_SUFFIXES:
+            # loop a still image for (just past) the overlay span
+            dur = max(b.end_s - b.start_s, 0.1) + 0.2
+            args += ["-loop", "1", "-t", f"{dur:.3f}", "-i", str(b.asset)]
+        else:
+            args += ["-i", str(b.asset)]
+    if overlays:
+        # One filter_complex: main chain (ass/zoom/export) on [0:v] into
+        # [base0], then each B-roll segment chains on top, and the transcript
+        # caption drawtext chain goes LAST (above everything, never under b-roll).
+        prefix = f"{vf_graph}," if vf_graph else "null"
+        parts = [f"[0:v]{prefix}[base0]", *(b.segment for b in overlays)]
+        final_label = overlays[-1].out_label
+        if caption_filter:
+            parts.append(f"[{final_label}]{caption_filter}[vout]")
+            final_label = "vout"
+        args += [
+            "-filter_complex",
+            ";".join(parts),
+            "-map",
+            f"[{final_label}]",
+            "-c:v",
+            "libx264",
+            "-preset",
+            preset,
+            "-crf",
+            str(crf),
+            "-pix_fmt",
+            "yuv420p",
+        ]
+    elif vf_graph or caption_filter:
+        vf_parts = [p for p in (vf_graph, caption_filter) if p]
+        args += ["-vf", ",".join(vf_parts)]
         args += [
             "-c:v",
             "libx264",
@@ -330,6 +401,8 @@ def _final_pass(
         ]
     else:
         args += ["-c:v", "copy"]
+    if out_fps is not None:
+        args += ["-r", f"{out_fps:.6f}"]
     if has_audio:
         if af_chain:
             args += ["-af", af_chain, "-c:a", "aac", "-b:a", "160k"]
