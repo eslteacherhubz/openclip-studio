@@ -217,6 +217,13 @@ def test_transcript_editor_no_deletions(window) -> None:
     assert window.btn_ai_render.isEnabled()
 
 
+def test_ai_panel_has_auto_reframe_checkbox(window) -> None:
+    assert hasattr(window, "chk_auto_reframe")
+    assert not window.chk_auto_reframe.isChecked()  # opt-in
+    window.chk_auto_reframe.setChecked(True)
+    assert window.chk_auto_reframe.isChecked()
+
+
 def test_gui_entry_declines_without_media() -> None:
     if not _qt_available():
         pytest.skip("PySide6 (gui extra) not installed")

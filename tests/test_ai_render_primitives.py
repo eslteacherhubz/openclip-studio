@@ -271,8 +271,8 @@ class TestExecutorWiring:
         # broll pads to the export_config TARGET resolution (640x360), not source
         assert "scale=640:360" in overlay.segment
         assert "pad=640:360" in overlay.segment
-        filters = captured["video_filters"]
-        assert isinstance(filters, list) and filters[-1] == "scale=640:360"
+        # export scale is passed as final_scale (runs after zoom + reframe crop)
+        assert captured["final_scale"] == "scale=640:360"
         assert captured["out_fps"] == 30.0
 
     def test_clip_reshapes_timeline(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

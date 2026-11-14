@@ -232,6 +232,13 @@ class MainWindow(QMainWindow):
         cap_row.addWidget(QLabel("Caption style:"))
         cap_row.addWidget(self.cmb_caption_style, 1)
         layout.addLayout(cap_row)
+        self.chk_auto_reframe = QCheckBox("Auto-Reframe (9:16, subject tracking)")
+        self.chk_auto_reframe.setChecked(False)
+        self.chk_auto_reframe.setToolTip(
+            "Crop a smooth, subject-following 9:16 window before the export scale "
+            "(mock tracking data for now)"
+        )
+        layout.addWidget(self.chk_auto_reframe)
         note = QLabel(
             "Checked rows are accepted and rendered; unchecked rows are rejected. "
             "Provider defaults to local_mock (offline); pick a real provider and "
@@ -728,6 +735,7 @@ class MainWindow(QMainWindow):
                 crf=crf,
                 transcript_captions=self.chk_ai_captions.isChecked(),
                 caption_style=self.cmb_caption_style.currentText() or None,
+                smart_reframe=self.chk_auto_reframe.isChecked(),
             )
         )
         worker.progress.connect(self._on_render_progress)

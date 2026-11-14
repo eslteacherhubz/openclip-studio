@@ -16,8 +16,12 @@ from __future__ import annotations
 
 import shutil
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from openclip.ai.reframing import TrackingPoint
 from pathlib import Path
 
 from openclip.engine.align import Alignment, LineAlignment
@@ -44,6 +48,8 @@ class RenderOptions:
     keep_workdir: bool = False
     transcript_captions: bool = False  # burn AI/transcript caption drawtext chain
     caption_style: str | None = None  # STYLE_TEMPLATES name (None → Classic)
+    smart_reframe: bool = False  # subject-tracking crop before the export scale
+    tracking_data: Sequence[TrackingPoint] | None = None  # None → mock pan
 
 
 @dataclass
@@ -191,6 +197,7 @@ def render_export(
     broll: list[BrollOverlay] | None = None,
     out_fps: float | None = None,
     caption_filter: str | None = None,
+    final_scale: str | None = None,
 ) -> RenderResult:
     """Execute kept intervals + one final pass (captions/audio) deterministically.
 
@@ -213,7 +220,11 @@ def render_export(
         _concat(segments, master, media.has_audio)
 
         need_video = (
-            ass_text is not None or bool(video_filters) or bool(broll) or caption_filter is not None
+            ass_text is not None
+            or bool(video_filters)
+            or bool(broll)
+            or caption_filter is not None
+            or opts.smart_reframe
         )
         need_audio = audio_chain is not None
         if not need_video and not need_audio and out_fps is None:
@@ -227,6 +238,28 @@ def render_export(
                 vf.append(f"ass=filename='{escape_filter_path(ass_path)}'")
             if video_filters:
                 vf.extend(video_filters)
+            if opts.smart_reframe:
+                # Smart reframe: after the base cuts (segments are already
+                # concatenated) and after zoom-style filters, BEFORE the final
+                # export scale (`final_scale`) so the 9:16 window is computed on
+                # the base resolution.
+                from openclip.ai.reframing import (
+                    build_smart_reframe_filter,
+                    mock_tracking_data,
+                )
+
+                tracking = (
+                    list(opts.tracking_data)
+                    if opts.tracking_data
+                    else mock_tracking_data(kept_duration)
+                )
+                vf.append(
+                    build_smart_reframe_filter(
+                        tracking, (media.width or 1280, media.height or 720)
+                    )
+                )
+            if final_scale:
+                vf.append(final_scale)
             _final_pass(
                 master,
                 out,

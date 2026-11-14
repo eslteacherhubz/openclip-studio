@@ -225,6 +225,7 @@ def _cmd_ai_edit(args: argparse.Namespace) -> int:
             burn_captions=False,
             transcript_captions=args.captions,
             caption_style=args.caption_style,
+            smart_reframe=args.auto_reframe,
         ),
     )
     print(
@@ -434,6 +435,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         choices=["Classic", "Social", "Cinema", "Neon"],
         help="caption style template (with --captions)",
+    )
+    sp.add_argument(
+        "--auto-reframe",
+        action="store_true",
+        help="with --auto-accept: smart 9:16 subject-tracking crop (mock tracking data)",
     )
     sp.set_defaults(func=_cmd_ai_edit)
 

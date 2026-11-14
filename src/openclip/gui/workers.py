@@ -77,6 +77,7 @@ class AIRenderRequest:
     crf: int = 20
     transcript_captions: bool = False  # burn transcript-derived bilingual captions
     caption_style: str | None = None  # STYLE_TEMPLATES name
+    smart_reframe: bool = False  # subject-tracking 9:16 crop (mock tracking)
 
 
 class AIRenderWorker(QObject):
@@ -106,6 +107,7 @@ class AIRenderWorker(QObject):
                     crf=self._request.crf,
                     transcript_captions=self._request.transcript_captions,
                     caption_style=self._request.caption_style,
+                    smart_reframe=self._request.smart_reframe,
                 ),
                 progress=lambda stage, i, n: self.progress.emit(stage, i, n),
             )

@@ -261,12 +261,14 @@ def render_edl(
     # Computed BEFORE broll so overlays pad to the *target* resolution (the
     # export scale runs on the main chain first, then broll layers on top).
     out_fps: float | None = None
+    final_scale: str | None = None
     target_res = base_res
     export_decisions = [d for d in accepted if d.kind == "export_config"]
     if export_decisions:
         cfg = build_export_config_args(export_decisions[-1])  # ordered; last wins
-        if cfg.vf is not None:
-            video_filters.append(cfg.vf)
+        # The export scale runs LAST on the main chain — after zooms and after
+        # the smart-reframe crop (which is computed on the base resolution).
+        final_scale = cfg.vf
         out_fps = cfg.fps
         if cfg.width is not None and cfg.height is not None:
             target_res = (cfg.width, cfg.height)
@@ -365,6 +367,7 @@ def render_edl(
         broll=broll_overlays or None,
         out_fps=out_fps,
         caption_filter=caption_filter,
+        final_scale=final_scale,
     )
 
 
