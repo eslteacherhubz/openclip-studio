@@ -43,6 +43,7 @@ class RenderOptions:
     audio_preset: str | None = None  # None → use project.audio_preset
     keep_workdir: bool = False
     transcript_captions: bool = False  # burn AI/transcript caption drawtext chain
+    caption_style: str | None = None  # STYLE_TEMPLATES name (None → Classic)
 
 
 @dataclass
@@ -212,10 +213,7 @@ def render_export(
         _concat(segments, master, media.has_audio)
 
         need_video = (
-            ass_text is not None
-            or bool(video_filters)
-            or bool(broll)
-            or caption_filter is not None
+            ass_text is not None or bool(video_filters) or bool(broll) or caption_filter is not None
         )
         need_audio = audio_chain is not None
         if not need_video and not need_audio and out_fps is None:
@@ -336,9 +334,7 @@ def _render_segments(
 
 def _concat(segments: list[Path], master: Path, has_audio: bool) -> None:
     listing = master.parent / "concat.txt"
-    listing.write_text(
-        "\n".join(f"file '{s!s}'" for s in segments), encoding="utf-8"
-    )
+    listing.write_text("\n".join(f"file '{s!s}'" for s in segments), encoding="utf-8")
     run_ffmpeg(
         ["-y", "-f", "concat", "-safe", "0", "-i", str(listing), "-c", "copy", str(master)],
         timeout=600,

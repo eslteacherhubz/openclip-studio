@@ -24,8 +24,10 @@ FFmpeg filter strings that the director executor appends to the final pass.
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Literal
 
 from openclip.director.models import Decision
 from openclip.engine.enhance import PRESETS
@@ -220,6 +222,103 @@ class CaptionBlock:
         )
 
 
+# ---------------------------------------------------------------------------
+# Caption style engine (customizable aesthetics)
+# ---------------------------------------------------------------------------
+
+CaptionPosition = Literal["top", "center", "bottom"]
+
+_HEX_RE = re.compile(r"^#?([0-9a-fA-F]{6}|[0-9a-fA-F]{3})$")
+
+
+def hex_to_ffmpeg_color(hex_color: str) -> str:
+    """Map a hex color (`#RRGGBB` or `#RGB`) to FFmpeg's `0xRRGGBB` form."""
+    match = _HEX_RE.match(hex_color.strip())
+    if not match:
+        raise ValueError(f"invalid hex color {hex_color!r} (expected #RRGGBB or #RGB)")
+    digits = match.group(1)
+    if len(digits) == 3:
+        digits = "".join(c * 2 for c in digits)
+    return f"0x{digits.upper()}"
+
+
+def to_ffmpeg_color(color: str) -> str:
+    """FFmpeg color expression: hex → `0xRRGGBB`, named colors pass through.
+
+    Passing named colors through keeps the Classic template byte-identical to
+    the historical filter (`fontcolor=white:bordercolor=black`).
+    """
+    if _HEX_RE.match(color.strip()):
+        return hex_to_ffmpeg_color(color)
+    if not re.match(r"^[A-Za-z0-9@.]+$", color):
+        raise ValueError(f"invalid color {color!r} (hex #RRGGBB or FFmpeg color name)")
+    return color
+
+
+@dataclass(frozen=True)
+class CaptionStyle:
+    """Visual style for burned transcript captions.
+
+    Colors are hex (`#RRGGBB`/`#RGB`, mapped to `0xRRGGBB`) or FFmpeg color
+    names (passed through, e.g. the Classic defaults `white`/`black`).
+    """
+
+    font_family: str = "Sans"
+    primary_color: str = "white"
+    outline_color: str = "black"
+    outline_width: int = 2
+    position: CaptionPosition = "bottom"
+    shadow: bool = False
+
+    def __post_init__(self) -> None:
+        # validate colors eagerly so a bad template fails at construction
+        to_ffmpeg_color(self.primary_color)
+        to_ffmpeg_color(self.outline_color)
+        if self.outline_width < 0:
+            raise ValueError("outline_width must be >= 0")
+        if self.position not in ("top", "center", "bottom"):
+            raise ValueError(f"invalid position {self.position!r}")
+
+
+#: Named style templates selectable in the GUI / CLI.
+STYLE_TEMPLATES: dict[str, CaptionStyle] = {
+    "Classic": CaptionStyle(),
+    "Social": CaptionStyle(
+        font_family="Sans",
+        primary_color="#FFD400",  # bold yellow
+        outline_color="#000000",
+        outline_width=4,
+        position="bottom",
+        shadow=True,
+    ),
+    "Cinema": CaptionStyle(
+        font_family="Serif",
+        primary_color="#FFFFFF",
+        outline_color="#202020",
+        outline_width=1,
+        position="bottom",
+        shadow=False,
+    ),
+    "Neon": CaptionStyle(
+        font_family="Monospace",
+        primary_color="#39FF14",
+        outline_color="#003300",
+        outline_width=3,
+        position="center",
+        shadow=True,
+    ),
+}
+
+DEFAULT_CAPTION_STYLE = STYLE_TEMPLATES["Classic"]
+
+
+def get_caption_style(name: str | None) -> CaptionStyle:
+    """Resolve a template name to a CaptionStyle (None/unknown → Classic)."""
+    if name is None:
+        return DEFAULT_CAPTION_STYLE
+    return STYLE_TEMPLATES.get(name, DEFAULT_CAPTION_STYLE)
+
+
 def _escape_drawtext(text: str) -> str:
     """Escape text for a drawtext `text=` option and flatten newlines."""
     flattened = " ".join(text.split())
@@ -228,22 +327,41 @@ def _escape_drawtext(text: str) -> str:
     return flattened
 
 
+def _style_y(style: CaptionStyle, height: int, fontsize: int, margin: int, stacked: bool) -> str:
+    """Y position for a caption line given the style position.
+
+    ``stacked`` = the line is the top line of a bilingual pair (translation
+    goes one line below it).
+    """
+    lines = 2 if stacked else 1
+    if style.position == "top":
+        return str(margin)
+    if style.position == "center":
+        return f"(h-{lines * fontsize}-{margin})/2"
+    return str(height - lines * fontsize - margin)
+
+
 def build_caption_filter(
     kept_transcript_blocks: Sequence[CaptionBlock | dict[str, object]],
     target_resolution: tuple[int, int],
+    style: CaptionStyle | None = None,
 ) -> str | None:
     """Build a deterministic `drawtext` chain burning the kept caption blocks.
 
     Each block becomes one `drawtext` (original language) plus, when a
     translation is present, a second stacked below it (target language).
-    Styling: white text, black outline, bottom-center, safe margin. Times are
-    export-timeline seconds. Blocks with empty text or invalid timestamps are
-    skipped with a warning. Returns None when nothing is burnable. No temp
-    files — the whole chain is inline.
+    Styling comes from `style` (default: the Classic template — white text,
+    black outline, bottom-center, safe margin). Times are export-timeline
+    seconds. Blocks with empty text or invalid timestamps are skipped with a
+    warning. Returns None when nothing is burnable. No temp files — inline.
     """
+    style = style or DEFAULT_CAPTION_STYLE
     _width, height = target_resolution
     fontsize = max(12, int(height * 0.06))
     margin = max(8, int(height * 0.05))
+    fontcolor = to_ffmpeg_color(style.primary_color)
+    bordercolor = to_ffmpeg_color(style.outline_color)
+    shadow_opts = ":shadowcolor=black@0.6:shadowx=2:shadowy=2" if style.shadow else ""
     filters: list[str] = []
     for index, raw in enumerate(kept_transcript_blocks):
         try:
@@ -253,25 +371,29 @@ def build_caption_filter(
             continue
         enable = f"enable='between(t,{block.start_s:.3f},{block.end_s:.3f})'"
         base = (
-            f"drawtext=font='Sans':text='{{}}'"
-            f":fontsize={fontsize}:fontcolor=white:borderw=2:bordercolor=black"
-            f":x=(w-text_w)/2"
+            f"drawtext=font='{style.font_family}':text='{{}}'"
+            f":fontsize={fontsize}:fontcolor={fontcolor}"
+            f":borderw={style.outline_width}:bordercolor={bordercolor}"
+            f"{shadow_opts}:x=(w-text_w)/2"
         )
         if block.translation and block.translation.strip():
-            # stacked: original on top, translation below it
-            y_top = height - 2 * fontsize - margin
-            y_bottom = height - fontsize - margin
+            # stacked: original on top, translation one line below
+            y_top = _style_y(style, height, fontsize, margin, stacked=True)
+            y_bottom = _style_y(style, height, fontsize, margin, stacked=False)
+            if style.position == "bottom":
+                y_bottom = str(height - fontsize - margin)
+            elif style.position == "center":
+                y_bottom = f"(h-{fontsize}-{margin})/2+{fontsize}"
+            else:
+                y_bottom = str(margin + fontsize)
             filters.append(
-                base.replace("{}", _escape_drawtext(block.text), 1)
-                + f":y={y_top}:{enable}"
+                base.replace("{}", _escape_drawtext(block.text), 1) + f":y={y_top}:{enable}"
             )
             filters.append(
                 base.replace("{}", _escape_drawtext(block.translation), 1)
                 + f":y={y_bottom}:{enable}"
             )
         else:
-            filters.append(
-                base.replace("{}", _escape_drawtext(block.text), 1)
-                + f":y={height - fontsize - margin}:{enable}"
-            )
+            y = _style_y(style, height, fontsize, margin, stacked=False)
+            filters.append(base.replace("{}", _escape_drawtext(block.text), 1) + f":y={y}:{enable}")
     return ",".join(filters) if filters else None

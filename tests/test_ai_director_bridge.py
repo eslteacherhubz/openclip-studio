@@ -30,7 +30,13 @@ class TestDirectorBridge:
         decisions = ai_plan_to_director_decisions(_plan())  # type: ignore[arg-type]
         assert all(isinstance(d, Decision) for d in decisions)
         assert {d.kind for d in decisions} == {
-            "clip", "cut", "caption", "broll", "zoom", "audio_enhance", "export_config",
+            "clip",
+            "cut",
+            "caption",
+            "broll",
+            "zoom",
+            "audio_enhance",
+            "export_config",
         }
 
     def test_reasons_preserved_in_rationale(self) -> None:

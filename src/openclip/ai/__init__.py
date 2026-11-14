@@ -38,7 +38,9 @@ from openclip.ai.prompts import build_director_system_prompt, build_director_use
 from openclip.ai.providers import AIProvider, create_provider
 from openclip.ai.render_primitives import (
     DEFAULT_ZOOM_STRENGTH,
+    STYLE_TEMPLATES,
     CaptionBlock,
+    CaptionStyle,
     ExportConfigArgs,
     audio_chain_for_enhancement,
     build_broll_filter,
@@ -46,6 +48,9 @@ from openclip.ai.render_primitives import (
     build_export_config_args,
     build_export_vf,
     build_zoom_vf,
+    get_caption_style,
+    hex_to_ffmpeg_color,
+    to_ffmpeg_color,
 )
 from openclip.ai.review import AIReviewItem, ReviewStatus, plan_to_review_items
 from openclip.ai.transcript_editing import (
@@ -59,6 +64,7 @@ __all__ = [
     "AI_PLAN_SCHEMA_VERSION",
     "DEFAULT_ZOOM_STRENGTH",
     "PROVIDER_NAMES",
+    "STYLE_TEMPLATES",
     "AIAudioEnhancement",
     "AIBRoll",
     "AICaption",
@@ -75,6 +81,7 @@ __all__ = [
     "AIZoom",
     "AnthropicClient",
     "CaptionBlock",
+    "CaptionStyle",
     "ExportConfigArgs",
     "MockAIProvider",
     "OpenAICompatibleClient",
@@ -97,11 +104,14 @@ __all__ = [
     "decisions_to_json",
     "extract_json_object",
     "generate_plan",
+    "get_caption_style",
+    "hex_to_ffmpeg_color",
     "load_provider_config",
     "normalize_ai_plan",
     "parse_ai_plan",
     "parse_ai_plan_json",
     "parse_transcript",
     "plan_to_review_items",
+    "to_ffmpeg_color",
     "transcript_to_edits",
 ]

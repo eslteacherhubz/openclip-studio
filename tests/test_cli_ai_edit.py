@@ -24,10 +24,14 @@ def test_ai_edit_without_auto_accept_prints_review_json(
     rc = main(
         [
             "ai-edit",
-            "--media", str(lesson),
-            "--prompt", "Make a short clip about the main topic",
-            "-o", str(out),
-            "--provider", "local_mock",
+            "--media",
+            str(lesson),
+            "--prompt",
+            "Make a short clip about the main topic",
+            "-o",
+            str(out),
+            "--provider",
+            "local_mock",
         ]
     )
     assert rc == 0
@@ -51,10 +55,14 @@ def test_ai_edit_with_transcript_file(
     rc = main(
         [
             "ai-edit",
-            "--media", str(lesson),
-            "--prompt", "highlight the greeting",
-            "--transcript", str(transcript),
-            "-o", str(out),
+            "--media",
+            str(lesson),
+            "--prompt",
+            "highlight the greeting",
+            "--transcript",
+            str(transcript),
+            "-o",
+            str(out),
         ]
     )
     assert rc == 0
@@ -67,10 +75,14 @@ def test_ai_edit_auto_accept_renders_mp4(lesson: Path, tmp_path: Path) -> None:
     rc = main(
         [
             "ai-edit",
-            "--media", str(lesson),
-            "--prompt", "Remove the silent pause and keep the rest",
-            "-o", str(out),
-            "--provider", "local_mock",
+            "--media",
+            str(lesson),
+            "--prompt",
+            "Remove the silent pause and keep the rest",
+            "-o",
+            str(out),
+            "--provider",
+            "local_mock",
             "--auto-accept",
         ]
     )
@@ -82,9 +94,7 @@ def test_ai_edit_auto_accept_renders_mp4(lesson: Path, tmp_path: Path) -> None:
     assert 8.0 < info.duration_s < 10.0
 
 
-def test_ai_edit_auto_accept_with_captions_burns_text(
-    lesson: Path, tmp_path: Path
-) -> None:
+def test_ai_edit_auto_accept_with_captions_burns_text(lesson: Path, tmp_path: Path) -> None:
     from openclip.engine.ffmpeg import run_ffmpeg
 
     def _frame(video: Path, t: float, out: Path) -> bytes:
@@ -96,9 +106,12 @@ def test_ai_edit_auto_accept_with_captions_burns_text(
 
     base_args = [
         "ai-edit",
-        "--media", str(lesson),
-        "--prompt", "caption the greeting",
-        "--provider", "local_mock",
+        "--media",
+        str(lesson),
+        "--prompt",
+        "caption the greeting",
+        "--provider",
+        "local_mock",
         "--auto-accept",
     ]
     out_cap = tmp_path / "cap.mp4"

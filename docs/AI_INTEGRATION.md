@@ -99,17 +99,20 @@ schema.
 ```python
 import json
 from openclip.ai import (
-    MockAIProvider, load_provider_config,
-    parse_ai_plan, normalize_ai_plan, plan_to_review_items,
+    MockAIProvider,
+    load_provider_config,
+    parse_ai_plan,
+    normalize_ai_plan,
+    plan_to_review_items,
     ai_plan_to_director_decisions,
 )
 
 provider = MockAIProvider(load_provider_config("local_mock"))
 raw = provider.complete("Make a 30-second highlight reel")
 
-plan = parse_ai_plan(json.loads(raw))      # strict validation, raises AIPlanError
-plan = normalize_ai_plan(plan)             # pure: sort, dedupe, clamp, assign IDs
-items = plan_to_review_items(plan)         # every proposal becomes PENDING review item
+plan = parse_ai_plan(json.loads(raw))  # strict validation, raises AIPlanError
+plan = normalize_ai_plan(plan)  # pure: sort, dedupe, clamp, assign IDs
+items = plan_to_review_items(plan)  # every proposal becomes PENDING review item
 decisions = ai_plan_to_director_decisions(plan)  # cut/caption → pending director Decisions
 ```
 

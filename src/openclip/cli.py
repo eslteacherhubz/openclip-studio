@@ -221,7 +221,11 @@ def _cmd_ai_edit(args: argparse.Namespace) -> int:
         media,
         edl,
         args.out,
-        RenderOptions(burn_captions=False, transcript_captions=args.captions),
+        RenderOptions(
+            burn_captions=False,
+            transcript_captions=args.captions,
+            caption_style=args.caption_style,
+        ),
     )
     print(
         f"Exported: {result.out}\n"
@@ -425,6 +429,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="with --auto-accept: burn the plan's bilingual captions (inline drawtext)",
     )
+    sp.add_argument(
+        "--caption-style",
+        default=None,
+        choices=["Classic", "Social", "Cinema", "Neon"],
+        help="caption style template (with --captions)",
+    )
     sp.set_defaults(func=_cmd_ai_edit)
 
     sp = sub.add_parser(
@@ -455,9 +465,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--max-frames", type=int, default=None)
     sp.set_defaults(func=_cmd_gaze_analyze)
 
-    sp = sub.add_parser(
-        "gaze-apply", help="write a gaze-corrected copy (research; 'gaze' extra)"
-    )
+    sp = sub.add_parser("gaze-apply", help="write a gaze-corrected copy (research; 'gaze' extra)")
     sp.add_argument("media")
     sp.add_argument("-o", "--out", required=True)
     sp.add_argument("--strength", type=float, default=0.8)

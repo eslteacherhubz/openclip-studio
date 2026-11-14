@@ -7,13 +7,18 @@ from pathlib import Path
 import pytest
 
 from openclip.ai import (
+    STYLE_TEMPLATES,
     CaptionBlock,
+    CaptionStyle,
     audio_chain_for_enhancement,
     build_broll_filter,
     build_caption_filter,
     build_export_config_args,
     build_export_vf,
     build_zoom_vf,
+    get_caption_style,
+    hex_to_ffmpeg_color,
+    to_ffmpeg_color,
 )
 from openclip.director.executor import render_edl
 from openclip.director.models import Decision, EditDecisionList
@@ -33,8 +38,14 @@ def broll_asset(tmp_path_factory: pytest.TempPathFactory) -> Path:
     out = tmp_path_factory.mktemp("ai-assets") / "broll.png"
     run_ffmpeg(
         [
-            "-y", "-f", "lavfi", "-i", "color=c=red:size=320x180:duration=1",
-            "-frames:v", "1", str(out),
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=red:size=320x180:duration=1",
+            "-frames:v",
+            "1",
+            str(out),
         ],
         timeout=60,
     )
@@ -127,17 +138,26 @@ class TestExecutorWiring:
         project, media = _project_media(tmp_path)
         decisions = [
             Decision(
-                id="c1", kind="cut", source_span=(2.0, 3.0), rationale="silence",
+                id="c1",
+                kind="cut",
+                source_span=(2.0, 3.0),
+                rationale="silence",
                 status="accepted",
             ),
             Decision(
-                id="z1", kind="zoom", source_span=(4.0, 6.0),
-                params={"strength": 0.5}, rationale="punch in", status="accepted",
+                id="z1",
+                kind="zoom",
+                source_span=(4.0, 6.0),
+                params={"strength": 0.5},
+                rationale="punch in",
+                status="accepted",
             ),
             Decision(
-                id="a1", kind="audio_enhance",
+                id="a1",
+                kind="audio_enhance",
                 params={"enabled": True, "denoise": True, "loudness_normalize": True},
-                rationale="clean audio", status="accepted",
+                rationale="clean audio",
+                status="accepted",
             ),
         ]
         edl = EditDecisionList(project_source="in.mp4", decisions=decisions)
@@ -164,19 +184,29 @@ class TestExecutorWiring:
         def _fake(**kwargs: object) -> RenderResult:
             captured.update(kwargs)
             return RenderResult(
-                out=Path(str(kwargs["out_path"])), kept_duration_s=12.0, segments=1,
-                cuts_applied=1, captions_burned=False, audio_enhanced=False,
+                out=Path(str(kwargs["out_path"])),
+                kept_duration_s=12.0,
+                segments=1,
+                cuts_applied=1,
+                captions_burned=False,
+                audio_enhanced=False,
             )
 
         monkeypatch.setattr(executor, "render_export", _fake)
         project, media = _project_media(tmp_path)
         decisions = [
             Decision(
-                id="c1", kind="cut", source_span=(2.0, 6.0), rationale="silence",
+                id="c1",
+                kind="cut",
+                source_span=(2.0, 6.0),
+                rationale="silence",
                 status="accepted",
             ),
             Decision(
-                id="z1", kind="zoom", source_span=(3.0, 4.0), rationale="inside cut",
+                id="z1",
+                kind="zoom",
+                source_span=(3.0, 4.0),
+                rationale="inside cut",
                 status="accepted",
             ),
         ]
@@ -194,8 +224,12 @@ class TestExecutorWiring:
         def _fake(**kwargs: object) -> RenderResult:
             captured.update(kwargs)
             return RenderResult(
-                out=Path(str(kwargs["out_path"])), kept_duration_s=12.0, segments=1,
-                cuts_applied=1, captions_burned=False, audio_enhanced=False,
+                out=Path(str(kwargs["out_path"])),
+                kept_duration_s=12.0,
+                segments=1,
+                cuts_applied=1,
+                captions_burned=False,
+                audio_enhanced=False,
             )
 
         monkeypatch.setattr(executor, "render_export", _fake)
@@ -204,17 +238,26 @@ class TestExecutorWiring:
         project, media = _project_media(tmp_path)
         decisions = [
             Decision(
-                id="c1", kind="cut", source_span=(2.0, 3.0), rationale="silence",
+                id="c1",
+                kind="cut",
+                source_span=(2.0, 3.0),
+                rationale="silence",
                 status="accepted",
             ),
             Decision(
-                id="b1", kind="broll", source_span=(4.0, 6.0),
-                params={"asset": str(asset)}, rationale="b-roll", status="accepted",
+                id="b1",
+                kind="broll",
+                source_span=(4.0, 6.0),
+                params={"asset": str(asset)},
+                rationale="b-roll",
+                status="accepted",
             ),
             Decision(
-                id="e1", kind="export_config",
+                id="e1",
+                kind="export_config",
                 params={"width": 640, "height": 360, "fps": 30.0, "vertical": False},
-                rationale="hd", status="accepted",
+                rationale="hd",
+                status="accepted",
             ),
         ]
         edl = EditDecisionList(project_source="in.mp4", decisions=decisions)
@@ -232,9 +275,7 @@ class TestExecutorWiring:
         assert isinstance(filters, list) and filters[-1] == "scale=640:360"
         assert captured["out_fps"] == 30.0
 
-    def test_clip_reshapes_timeline(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
+    def test_clip_reshapes_timeline(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         from openclip.director import executor
 
         captured: dict[str, object] = {}
@@ -242,28 +283,46 @@ class TestExecutorWiring:
         def _fake(**kwargs: object) -> RenderResult:
             captured.update(kwargs)
             return RenderResult(
-                out=Path(str(kwargs["out_path"])), kept_duration_s=4.0, segments=1,
-                cuts_applied=2, captions_burned=False, audio_enhanced=False,
+                out=Path(str(kwargs["out_path"])),
+                kept_duration_s=4.0,
+                segments=1,
+                cuts_applied=2,
+                captions_burned=False,
+                audio_enhanced=False,
             )
 
         monkeypatch.setattr(executor, "render_export", _fake)
         project, media = _project_media(tmp_path)
         decisions = [
             Decision(
-                id="keep1", kind="clip", source_span=(2.0, 6.0), rationale="keep this",
+                id="keep1",
+                kind="clip",
+                source_span=(2.0, 6.0),
+                rationale="keep this",
                 status="accepted",
             ),
             Decision(
-                id="c1", kind="cut", source_span=(3.0, 4.0), rationale="filler inside clip",
+                id="c1",
+                kind="cut",
+                source_span=(3.0, 4.0),
+                rationale="filler inside clip",
                 status="accepted",
             ),
             Decision(
-                id="z1", kind="zoom", source_span=(5.0, 6.0), params={"strength": 0.5},
-                rationale="zoom in clip", status="accepted",
+                id="z1",
+                kind="zoom",
+                source_span=(5.0, 6.0),
+                params={"strength": 0.5},
+                rationale="zoom in clip",
+                status="accepted",
             ),
             Decision(
-                id="z2", kind="zoom", source_span=(10.0, 12.0), params={"strength": 0.5},
-                rationale="zoom outside clip", status="accepted",
+                id="z2",
+                kind="zoom",
+                source_span=(10.0, 12.0),
+                params={"strength": 0.5},
+                rationale="zoom outside clip",
+                status="accepted",
             ),
         ]
         edl = EditDecisionList(project_source="in.mp4", decisions=decisions)
@@ -289,15 +348,22 @@ class TestExecutorWiring:
         def _fake(**kwargs: object) -> RenderResult:
             captured.update(kwargs)
             return RenderResult(
-                out=Path(str(kwargs["out_path"])), kept_duration_s=14.0, segments=1,
-                cuts_applied=0, captions_burned=False, audio_enhanced=False,
+                out=Path(str(kwargs["out_path"])),
+                kept_duration_s=14.0,
+                segments=1,
+                cuts_applied=0,
+                captions_burned=False,
+                audio_enhanced=False,
             )
 
         monkeypatch.setattr(executor, "render_export", _fake)
         project, media = _project_media(tmp_path)
         decisions = [
             Decision(
-                id="b1", kind="broll", source_span=(1.0, 2.0), rationale="b-roll",
+                id="b1",
+                kind="broll",
+                source_span=(1.0, 2.0),
+                rationale="b-roll",
                 status="accepted",
             ),
             Decision(id="e1", kind="export_config", rationale="mp4", status="accepted"),
@@ -360,9 +426,7 @@ class TestBuildExportConfig:
         assert cfg.vertical is False
 
     def test_vertical_center_crop(self) -> None:
-        cfg = build_export_config_args(
-            self._decision(width=1080, height=1920, vertical=True)
-        )
+        cfg = build_export_config_args(self._decision(width=1080, height=1920, vertical=True))
         assert cfg.vf is not None
         assert cfg.vf.startswith("crop=w=trunc(ih*0.562500/2)*2:h=ih:x=(iw-ow)/2:y=0,")
         assert cfg.vf.endswith(",scale=1080:1920")
@@ -374,9 +438,7 @@ class TestBuildExportConfig:
         assert cfg.fps is None
 
     def test_invalid_values_ignored(self) -> None:
-        cfg = build_export_config_args(
-            self._decision(width=-5, height="x", fps=0, vertical="yes")
-        )
+        cfg = build_export_config_args(self._decision(width=-5, height="x", fps=0, vertical="yes"))
         assert cfg.vf is None and cfg.fps is None and cfg.vertical is False
 
     def test_build_export_vf_directly(self) -> None:
@@ -440,22 +502,81 @@ class TestBuildCaptionFilter:
         assert vf_1080 is not None and "fontsize=64" in vf_1080  # 1080*0.06
 
 
+class TestCaptionStyle:
+    def test_hex_to_ffmpeg_color(self) -> None:
+        assert hex_to_ffmpeg_color("#FFFFFF") == "0xFFFFFF"
+        assert hex_to_ffmpeg_color("ffd400") == "0xFFD400"
+        assert hex_to_ffmpeg_color("#abc") == "0xAABBCC"
+        with pytest.raises(ValueError):
+            hex_to_ffmpeg_color("red")
+        with pytest.raises(ValueError):
+            hex_to_ffmpeg_color("#12345")
+
+    def test_to_ffmpeg_color_passthrough_names(self) -> None:
+        assert to_ffmpeg_color("white") == "white"
+        assert to_ffmpeg_color("#39FF14") == "0x39FF14"
+        with pytest.raises(ValueError):
+            to_ffmpeg_color("bad color;drop")
+
+    def test_default_style_byte_identical(self) -> None:
+        # Classic/default must reproduce the historical filter exactly
+        blocks = [CaptionBlock(text="Hello", start_s=1.0, end_s=3.0)]
+        vf = build_caption_filter(blocks, (320, 180))
+        assert vf == build_caption_filter(blocks, (320, 180), CaptionStyle())
+        assert vf == build_caption_filter(blocks, (320, 180), get_caption_style(None))
+        assert vf == build_caption_filter(blocks, (320, 180), get_caption_style("Classic"))
+        assert "fontcolor=white" in vf and "bordercolor=black" in vf
+
+    def test_templates_resolve(self) -> None:
+        assert set(STYLE_TEMPLATES) == {"Classic", "Social", "Cinema", "Neon"}
+        for name, style in STYLE_TEMPLATES.items():
+            assert get_caption_style(name) == style
+        assert get_caption_style("nope") == STYLE_TEMPLATES["Classic"]
+
+    def test_style_changes_filter_string(self) -> None:
+        blocks = [CaptionBlock(text="Hi", start_s=0.0, end_s=1.0)]
+        social = get_caption_style("Social")
+        vf = build_caption_filter(blocks, (320, 180), social)
+        assert vf is not None
+        assert "fontcolor=0xFFD400" in vf and "borderw=4" in vf
+        assert "shadowcolor=black@0.6" in vf
+        center = get_caption_style("Neon")
+        vf2 = build_caption_filter(blocks, (320, 180), center)
+        assert vf2 is not None and "font='Monospace'" in vf2 and "y=(h-" in vf2
+
+    def test_invalid_style_rejected(self) -> None:
+        with pytest.raises(ValueError):
+            CaptionStyle(primary_color="not a color;")
+        with pytest.raises(ValueError):
+            CaptionStyle(position="middle")  # type: ignore[arg-type]
+        with pytest.raises(ValueError):
+            CaptionStyle(outline_width=-1)
+
+
 class TestRealRender:
     def _edl(self, zoom_strength: float) -> EditDecisionList:
         decisions = [
             Decision(
-                id="c1", kind="cut", source_span=(2.0, 3.0), rationale="silence",
+                id="c1",
+                kind="cut",
+                source_span=(2.0, 3.0),
+                rationale="silence",
                 status="accepted",
             ),
             Decision(
-                id="z1", kind="zoom", source_span=(4.0, 8.0),
-                params={"strength": zoom_strength}, rationale="punch in on key point",
+                id="z1",
+                kind="zoom",
+                source_span=(4.0, 8.0),
+                params={"strength": zoom_strength},
+                rationale="punch in on key point",
                 status="accepted",
             ),
             Decision(
-                id="a1", kind="audio_enhance",
+                id="a1",
+                kind="audio_enhance",
                 params={"enabled": True, "denoise": True, "loudness_normalize": True},
-                rationale="clean audio", status="accepted",
+                rationale="clean audio",
+                status="accepted",
             ),
         ]
         return EditDecisionList(project_source="lesson.mp4", decisions=decisions)
@@ -504,12 +625,20 @@ class TestRealRender:
         project = Project.create(source=lesson, script_text="")
         media = probe(lesson)
         good = Decision(
-            id="b1", kind="broll", source_span=(2.0, 6.0),
-            params={"asset": str(broll_asset)}, rationale="red board", status="accepted",
+            id="b1",
+            kind="broll",
+            source_span=(2.0, 6.0),
+            params={"asset": str(broll_asset)},
+            rationale="red board",
+            status="accepted",
         )
         missing = Decision(
-            id="b2", kind="broll", source_span=(7.0, 9.0),
-            params={"asset": str(tmp_path / "nope.png")}, rationale="gone", status="accepted",
+            id="b2",
+            kind="broll",
+            source_span=(7.0, 9.0),
+            params={"asset": str(tmp_path / "nope.png")},
+            rationale="gone",
+            status="accepted",
         )
         out = tmp_path / "broll.mp4"
         with caplog.at_level("WARNING"):
@@ -525,9 +654,11 @@ class TestRealRender:
         project = Project.create(source=lesson, script_text="")
         media = probe(lesson)
         decision = Decision(
-            id="e1", kind="export_config",
+            id="e1",
+            kind="export_config",
             params={"format": "mp4", "width": 160, "height": 90, "fps": 30.0},
-            rationale="small preview", status="accepted",
+            rationale="small preview",
+            status="accepted",
         )
         out = tmp_path / "small.mp4"
         render_edl(project, media, self._edl_with(decision), out)
@@ -539,8 +670,11 @@ class TestRealRender:
         project = Project.create(source=lesson, script_text="")
         media = probe(lesson)
         decision = Decision(
-            id="keep1", kind="clip", source_span=(4.0, 8.0),
-            rationale="keep only the key example", status="accepted",
+            id="keep1",
+            kind="clip",
+            source_span=(4.0, 8.0),
+            rationale="keep only the key example",
+            status="accepted",
         )
         out = tmp_path / "clip.mp4"
         result = render_edl(project, media, self._edl_with(decision), out)
@@ -560,31 +694,47 @@ class TestRealRender:
         def _fake(**kwargs: object) -> RenderResult:
             captured.update(kwargs)
             return RenderResult(
-                out=Path(str(kwargs["out_path"])), kept_duration_s=12.0, segments=1,
-                cuts_applied=1, captions_burned=True, audio_enhanced=False,
+                out=Path(str(kwargs["out_path"])),
+                kept_duration_s=12.0,
+                segments=1,
+                cuts_applied=1,
+                captions_burned=True,
+                audio_enhanced=False,
             )
 
         monkeypatch.setattr(executor, "render_export", _fake)
         project, media = _project_media(tmp_path)
         decisions = [
             Decision(
-                id="c1", kind="cut", source_span=(2.0, 3.0), rationale="silence",
+                id="c1",
+                kind="cut",
+                source_span=(2.0, 3.0),
+                rationale="silence",
                 status="accepted",
             ),
             Decision(
-                id="cap1", kind="caption", source_span=(4.0, 6.0),
+                id="cap1",
+                kind="caption",
+                source_span=(4.0, 6.0),
                 params={"primary": "Hello", "support": "Hola", "origin": "ai"},
-                rationale="Hello", status="accepted",
+                rationale="Hello",
+                status="accepted",
             ),
             Decision(
-                id="cap2", kind="caption", source_span=(2.0, 3.0),  # inside the cut
+                id="cap2",
+                kind="caption",
+                source_span=(2.0, 3.0),  # inside the cut
                 params={"primary": "Removed", "origin": "ai"},
-                rationale="Removed", status="accepted",
+                rationale="Removed",
+                status="accepted",
             ),
         ]
         edl = EditDecisionList(project_source="in.mp4", decisions=decisions)
         render_edl(
-            project, media, edl, tmp_path / "out.mp4",
+            project,
+            media,
+            edl,
+            tmp_path / "out.mp4",
             RenderOptions(transcript_captions=True),
         )
         vf = str(captured["caption_filter"])
@@ -602,16 +752,24 @@ class TestRealRender:
         def _fake(**kwargs: object) -> RenderResult:
             captured.update(kwargs)
             return RenderResult(
-                out=Path(str(kwargs["out_path"])), kept_duration_s=14.0, segments=1,
-                cuts_applied=0, captions_burned=False, audio_enhanced=False,
+                out=Path(str(kwargs["out_path"])),
+                kept_duration_s=14.0,
+                segments=1,
+                cuts_applied=0,
+                captions_burned=False,
+                audio_enhanced=False,
             )
 
         monkeypatch.setattr(executor, "render_export", _fake)
         project, media = _project_media(tmp_path)
         decisions = [
             Decision(
-                id="cap1", kind="caption", source_span=(1.0, 2.0),
-                params={"primary": "Hi", "origin": "ai"}, rationale="Hi", status="accepted",
+                id="cap1",
+                kind="caption",
+                source_span=(1.0, 2.0),
+                params={"primary": "Hi", "origin": "ai"},
+                rationale="Hi",
+                status="accepted",
             )
         ]
         edl = EditDecisionList(project_source="in.mp4", decisions=decisions)
@@ -625,17 +783,30 @@ class TestRealRender:
         black = tmp_path / "black.mp4"
         run_ffmpeg(
             [
-                "-y", "-f", "lavfi", "-i", "color=c=black:size=320x180:rate=15:duration=10",
-                "-pix_fmt", "yuv420p", "-c:v", "libx264", "-crf", "20", str(black),
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=black:size=320x180:rate=15:duration=10",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:v",
+                "libx264",
+                "-crf",
+                "20",
+                str(black),
             ],
             timeout=120,
         )
         project = Project.create(source=black, script_text="")
         media = probe(black)
         decision = Decision(
-            id="cap1", kind="caption", source_span=(2.0, 6.0),
+            id="cap1",
+            kind="caption",
+            source_span=(2.0, 6.0),
             params={"primary": "BURNED CAPTION", "support": "Subtitulo", "origin": "ai"},
-            rationale="caption", status="accepted",
+            rationale="caption",
+            status="accepted",
         )
         edl = EditDecisionList(project_source="black.mp4", decisions=[decision])
         out_cap = tmp_path / "cap.mp4"
@@ -651,9 +822,11 @@ class TestRealRender:
         project = Project.create(source=lesson, script_text="")
         media = probe(lesson)
         decision = Decision(
-            id="e1", kind="export_config",
+            id="e1",
+            kind="export_config",
             params={"width": 180, "height": 320, "vertical": True},
-            rationale="shorts", status="accepted",
+            rationale="shorts",
+            status="accepted",
         )
         out = tmp_path / "short.mp4"
         render_edl(project, media, self._edl_with(decision), out)

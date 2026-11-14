@@ -32,6 +32,7 @@ class TranscriptSegment:
     text: str
     start_s: float | None
     end_s: float | None
+    translation: str | None = None
 
 
 def _normalize(text: str) -> str:
@@ -70,26 +71,36 @@ def parse_transcript(data: object) -> list[TranscriptSegment]:
                 f"transcript segment must be a string or object, got {type(item).__name__}"
             )
         text = item.get("text") or item.get("primary") or ""
-        start = _optional_float(
-            item.get("start", item.get("start_s", item.get("start_seconds")))
-        )
+        translation_raw = item.get("translation") or item.get("support")
+        start = _optional_float(item.get("start", item.get("start_s", item.get("start_seconds"))))
         end = _optional_float(item.get("end", item.get("end_s", item.get("end_seconds"))))
-        segments.append(TranscriptSegment(text=str(text), start_s=start, end_s=end))
+        segments.append(
+            TranscriptSegment(
+                text=str(text),
+                start_s=start,
+                end_s=end,
+                translation=(str(translation_raw) if isinstance(translation_raw, str) else None),
+            )
+        )
     return segments
 
 
 def transcript_to_edits(
-    original_transcript: object, edited_transcript: object
+    original_transcript: object,
+    edited_transcript: object,
+    include_captions: bool = False,
 ) -> list[Decision]:
-    """Diff `edited_transcript` against `original_transcript` → cut Decisions.
+    """Diff `edited_transcript` against `original_transcript` → Decisions.
 
     Matching is exact on normalized text first, then fuzzy (rapidfuzz ratio ≥
     ``FUZZY_KEEP_THRESHOLD``) so slightly reworded blocks still count as kept.
     Original blocks with no match in the edited transcript were deleted by the
     user → one pending ``cut`` decision each, at the original timestamps.
-    Segments without valid timestamps are skipped with a warning. Additions in
-    the edited transcript never create cuts. Deterministic and side-effect
-    free (logging only).
+    When ``include_captions`` is set, every surviving (kept) block with valid
+    timestamps also generates a pending ``caption`` decision for its timespan
+    (bilingual when the block has a translation). Segments without valid
+    timestamps are skipped with a warning. Additions in the edited transcript
+    never create cuts. Deterministic and side-effect free (logging only).
     """
     original = parse_transcript(original_transcript)
     edited = parse_transcript(edited_transcript)
@@ -108,24 +119,43 @@ def transcript_to_edits(
         norm = _normalize(seg.text)
         if not norm:
             continue
+        kept = False
         if remaining.get(norm, 0) > 0:
             remaining[norm] -= 1
-            continue  # kept verbatim
-        best_text, best_score = "", 0.0
-        for candidate in edited_norms:
-            if remaining.get(candidate, 0) <= 0:
-                continue
-            score = fuzz.ratio(norm, candidate)
-            if score > best_score:
-                best_text, best_score = candidate, score
-        if best_score >= FUZZY_KEEP_THRESHOLD:
-            remaining[best_text] -= 1
-            continue  # slightly reworded → still kept
-        if (
-            seg.start_s is None
-            or seg.end_s is None
-            or not (0.0 <= seg.start_s < seg.end_s)
-        ):
+            kept = True  # kept verbatim
+        else:
+            best_text, best_score = "", 0.0
+            for candidate in edited_norms:
+                if remaining.get(candidate, 0) <= 0:
+                    continue
+                score = fuzz.ratio(norm, candidate)
+                if score > best_score:
+                    best_text, best_score = candidate, score
+            if best_score >= FUZZY_KEEP_THRESHOLD:
+                remaining[best_text] -= 1
+                kept = True  # slightly reworded → still kept
+        has_valid_span = (
+            seg.start_s is not None and seg.end_s is not None and 0.0 <= seg.start_s < seg.end_s
+        )
+        if kept:
+            if include_captions and has_valid_span:
+                assert seg.start_s is not None and seg.end_s is not None
+                decisions.append(
+                    Decision(
+                        id=f"transcript-cap-{index:03d}",
+                        kind="caption",
+                        source_span=(seg.start_s, seg.end_s),
+                        params={
+                            "origin": "transcript_edit",
+                            "primary": seg.text[:500],
+                            "support": seg.translation,
+                        },
+                        rationale=f"Caption for kept block: {seg.text[:60]!r}",
+                        status="pending",
+                    )
+                )
+            continue
+        if not has_valid_span:
             logger.warning(
                 "transcript edit: block %d was deleted but has no valid timestamps; "
                 "no cut generated for %r",
@@ -133,6 +163,7 @@ def transcript_to_edits(
                 seg.text[:60],
             )
             continue
+        assert seg.start_s is not None and seg.end_s is not None
         decisions.append(
             Decision(
                 id=f"transcript-cut-{index:03d}",

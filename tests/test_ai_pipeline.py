@@ -49,9 +49,7 @@ class _WrappedProvider:
         system: str | None = None,
         response_format: str | None = None,
     ) -> str:
-        self.calls.append(
-            {"prompt": prompt, "system": system, "response_format": response_format}
-        )
+        self.calls.append({"prompt": prompt, "system": system, "response_format": response_format})
         return self._response
 
 
@@ -91,8 +89,16 @@ class TestPrompts:
         assert "OpenClip AI Director" in prompt
         assert "ONLY valid JSON" in prompt
         fields = (
-            "version", "provider", "prompt", "clips", "cuts",
-            "captions", "broll", "zooms", "audio", "export",
+            "version",
+            "provider",
+            "prompt",
+            "clips",
+            "cuts",
+            "captions",
+            "broll",
+            "zooms",
+            "audio",
+            "export",
         )
         for field in fields:
             assert field in prompt
@@ -204,20 +210,27 @@ class TestDirectorExtension:
         )
         decisions = [
             Decision(
-                id="z1", kind="zoom", source_span=(1.0, 2.0),
-                rationale="zoom here", status="accepted",
+                id="z1",
+                kind="zoom",
+                source_span=(1.0, 2.0),
+                rationale="zoom here",
+                status="accepted",
             ),
             Decision(
-                id="b1", kind="broll", source_span=(3.0, 4.0),
-                rationale="b-roll", status="accepted",
+                id="b1",
+                kind="broll",
+                source_span=(3.0, 4.0),
+                rationale="b-roll",
+                status="accepted",
             ),
             Decision(
-                id="c1", kind="clip", source_span=(0.0, 5.0),
-                rationale="keep only 0-5s", status="accepted",
+                id="c1",
+                kind="clip",
+                source_span=(0.0, 5.0),
+                rationale="keep only 0-5s",
+                status="accepted",
             ),
-            Decision(
-                id="a1", kind="audio_enhance", rationale="denoise", status="accepted"
-            ),
+            Decision(id="a1", kind="audio_enhance", rationale="denoise", status="accepted"),
             Decision(id="e1", kind="export_config", rationale="mp4", status="accepted"),
         ]
         edl = EditDecisionList(project_source="in.mp4", decisions=decisions)

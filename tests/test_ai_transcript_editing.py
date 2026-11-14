@@ -18,11 +18,7 @@ from openclip.engine.synth import generate_lesson, lesson_plan
 
 def _original() -> dict[str, object]:
     segments, _total = lesson_plan()
-    return {
-        "segments": [
-            {"text": s.primary, "start": s.start_s, "end": s.end_s} for s in segments
-        ]
-    }
+    return {"segments": [{"text": s.primary, "start": s.start_s, "end": s.end_s} for s in segments]}
 
 
 def _edited_without(index: int) -> dict[str, object]:
@@ -68,10 +64,12 @@ class TestTranscriptToEdits:
     def test_slightly_modified_block_is_kept(self) -> None:
         original = _original()
         segments, _ = lesson_plan()
-        edited = {"segments": [
-            {"text": (s.primary + " please") if i == 0 else s.primary}
-            for i, s in enumerate(segments)
-        ]}
+        edited = {
+            "segments": [
+                {"text": (s.primary + " please") if i == 0 else s.primary}
+                for i, s in enumerate(segments)
+            ]
+        }
         # "please" appended — normalized ratio still ≥ 90 for these short lines? ensure via tweak
         decisions = transcript_to_edits(original, edited)
         # only blocks whose similarity dropped below threshold become cuts
@@ -83,9 +81,7 @@ class TestTranscriptToEdits:
         edited["segments"].append({"text": "A brand new sentence the teacher added"})  # type: ignore[index]
         assert transcript_to_edits(_original(), edited) == []
 
-    def test_delete_everything_cuts_all_text_blocks(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_delete_everything_cuts_all_text_blocks(self, caplog: pytest.LogCaptureFixture) -> None:
         with caplog.at_level("WARNING"):
             decisions = transcript_to_edits(_original(), {"segments": []})
         segments, _ = lesson_plan()
@@ -113,6 +109,42 @@ class TestTranscriptToEdits:
         second = transcript_to_edits(_original(), {"segments": []})
         assert [d.to_dict() for d in first] == [d.to_dict() for d in second]
 
+    def test_include_captions_off_by_default(self) -> None:
+        decisions = transcript_to_edits(_original(), _edited_without(1))
+        assert all(d.kind == "cut" for d in decisions)
+
+    def test_include_captions_emits_caption_decisions_for_kept_blocks(self) -> None:
+        segments, _ = lesson_plan()
+        original = {
+            "segments": [
+                {
+                    "text": s.primary,
+                    "start": s.start_s,
+                    "end": s.end_s,
+                    "translation": s.support or None,
+                }
+                for s in segments
+            ]
+        }
+        edited = _edited_without(1)
+        decisions = transcript_to_edits(original, edited, include_captions=True)
+        cuts = [d for d in decisions if d.kind == "cut"]
+        captions = [d for d in decisions if d.kind == "caption"]
+        assert len(cuts) == 1
+        text_segments = [s for s in segments if s.primary.strip()]
+        assert len(captions) == len(text_segments) - 1  # all kept blocks
+        for cap in captions:
+            assert cap.status == "pending"
+            assert cap.params["origin"] == "transcript_edit"
+            assert cap.params["primary"]
+            assert 0.0 <= cap.source_span[0] < cap.source_span[1]  # type: ignore[type-var]
+        # bilingual: translation carried into support param
+        with_translation = [c for c in captions if c.params.get("support")]
+        assert with_translation, "expected bilingual caption params"
+        # deleted block's span must not appear among caption spans
+        cut_span = cuts[0].source_span
+        assert all(c.source_span != cut_span for c in captions)
+
 
 @pytest.fixture(scope="module")
 def lesson(tmp_path_factory: pytest.TempPathFactory) -> Path:
@@ -135,10 +167,14 @@ class TestCliAiEditTranscript:
         rc = main(
             [
                 "ai-edit-transcript",
-                "--media", str(lesson),
-                "--transcript", str(edited),
-                "--original", str(original),
-                "-o", str(out),
+                "--media",
+                str(lesson),
+                "--transcript",
+                str(edited),
+                "--original",
+                str(original),
+                "-o",
+                str(out),
                 "--dry-run",
             ]
         )
@@ -154,10 +190,14 @@ class TestCliAiEditTranscript:
         rc = main(
             [
                 "ai-edit-transcript",
-                "--input", str(lesson),
-                "--transcript", str(edited),
-                "--original", str(original),
-                "-o", str(out),
+                "--input",
+                str(lesson),
+                "--transcript",
+                str(edited),
+                "--original",
+                str(original),
+                "-o",
+                str(out),
             ]
         )
         assert rc == 0
@@ -190,10 +230,14 @@ class TestCliAiEditTranscript:
         rc = main(
             [
                 "ai-edit-transcript",
-                "--media", str(lesson),
-                "--transcript", str(edited_path),
-                "--original", str(original_path),
-                "-o", str(out),
+                "--media",
+                str(lesson),
+                "--transcript",
+                str(edited_path),
+                "--original",
+                str(original_path),
+                "-o",
+                str(out),
             ]
         )
         assert rc == 2
@@ -208,10 +252,14 @@ class TestCliAiEditTranscript:
         rc = main(
             [
                 "ai-edit-transcript",
-                "--media", str(lesson),
-                "--transcript", str(original_path),
-                "--original", str(original_path),
-                "-o", str(tmp_path / "out.mp4"),
+                "--media",
+                str(lesson),
+                "--transcript",
+                str(original_path),
+                "--original",
+                str(original_path),
+                "-o",
+                str(tmp_path / "out.mp4"),
             ]
         )
         assert rc == 0

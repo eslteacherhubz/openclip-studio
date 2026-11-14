@@ -219,6 +219,19 @@ class MainWindow(QMainWindow):
         )
         self.ai_table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.ai_table)
+        cap_row = QHBoxLayout()
+        self.chk_ai_captions = QCheckBox("Burn transcript captions (bilingual)")
+        self.chk_ai_captions.setChecked(True)
+        cap_row.addWidget(self.chk_ai_captions)
+        self.cmb_caption_style = QComboBox()
+        from openclip.ai.render_primitives import STYLE_TEMPLATES
+
+        for name in STYLE_TEMPLATES:
+            self.cmb_caption_style.addItem(name)
+        self.cmb_caption_style.setCurrentText("Classic")
+        cap_row.addWidget(QLabel("Caption style:"))
+        cap_row.addWidget(self.cmb_caption_style, 1)
+        layout.addLayout(cap_row)
         note = QLabel(
             "Checked rows are accepted and rendered; unchecked rows are rejected. "
             "Provider defaults to local_mock (offline); pick a real provider and "
@@ -313,9 +326,7 @@ class MainWindow(QMainWindow):
         )
 
     def open_project(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Open project", "", "OpenClip project (*.json)"
-        )
+        path, _ = QFileDialog.getOpenFileName(self, "Open project", "", "OpenClip project (*.json)")
         if not path:
             return
         try:
@@ -353,9 +364,7 @@ class MainWindow(QMainWindow):
         self.project.audio_preset = self.cmb_audio.currentText()
         self.project.captions.animation = self.cmb_animation.currentText()
         self.project.captions.karaoke = self.chk_karaoke.isChecked()
-        self.media_label.setText(
-            f"{Path(self.project.source).name} — {self.media.duration_s:.1f}s"
-        )
+        self.media_label.setText(f"{Path(self.project.source).name} — {self.media.duration_s:.1f}s")
         self.player.setSource(QUrl.fromLocalFile(str(self.project.source)))
         self.slider.setRange(0, int(self.media.duration_s * 1000))
         for btn in (
@@ -458,9 +467,7 @@ class MainWindow(QMainWindow):
             if box is None or self.project.cut_plan is None:
                 continue
             # Unchecked = cut applied (removed). Checked = keep span.
-            self.project.cut_plan.cuts[row].accepted = (
-                box.checkState() == Qt.CheckState.Unchecked
-            )
+            self.project.cut_plan.cuts[row].accepted = box.checkState() == Qt.CheckState.Unchecked
 
     def _jump_to_cut(self, row: int, _col: int) -> None:
         assert self.project is not None and self.project.cut_plan is not None
@@ -474,14 +481,10 @@ class MainWindow(QMainWindow):
         if self.project is None or self.media is None or self._render_runner.busy:
             return
         if self.project.alignment is None:
-            QMessageBox.information(
-                self, "OpenClip", "Run Analyze first so the cut plan exists."
-            )
+            QMessageBox.information(self, "OpenClip", "Run Analyze first so the cut plan exists.")
             return
         self._cut_acceptance_from_table()
-        out, _ = QFileDialog.getSaveFileName(
-            self, "Export MP4", "lesson-edited.mp4", "MP4 (*.mp4)"
-        )
+        out, _ = QFileDialog.getSaveFileName(self, "Export MP4", "lesson-edited.mp4", "MP4 (*.mp4)")
         if not out:
             return
         try:
@@ -558,12 +561,8 @@ class MainWindow(QMainWindow):
             data = raw
         self._original_transcript = data
         segments = parse_transcript(data)
-        self.transcript_edit.setPlainText(
-            "\n\n".join(s.text for s in segments if s.text.strip())
-        )
-        self.statusBar().showMessage(
-            f"Loaded transcript {Path(path).name}: {len(segments)} blocks"
-        )
+        self.transcript_edit.setPlainText("\n\n".join(s.text for s in segments if s.text.strip()))
+        self.statusBar().showMessage(f"Loaded transcript {Path(path).name}: {len(segments)} blocks")
 
     def apply_transcript_edits(self) -> None:
         """Diff the edited transcript against the original → proposed cut decisions.
@@ -572,7 +571,7 @@ class MainWindow(QMainWindow):
         only content is the transcript cuts), so the user sees exactly what
         will be removed before rendering.
         """
-        from openclip.ai import AICut, AIDirectorPlan, AISpan, transcript_to_edits
+        from openclip.ai import AICaption, AICut, AIDirectorPlan, AISpan, transcript_to_edits
         from openclip.director.models import Decision
 
         original = self._original_transcript
@@ -581,18 +580,27 @@ class MainWindow(QMainWindow):
             blocks = [b.strip() for b in self.script_edit.toPlainText().split("\n\n") if b.strip()]
             original = {"segments": [{"text": b} for b in blocks]}
         edited = self.transcript_edit.toPlainText()
-        decisions = transcript_to_edits(original, edited)
+        decisions = transcript_to_edits(original, edited, include_captions=True)
         self._transcript_decisions = list(decisions)
 
         cuts: list[AICut] = []
+        captions: list[AICaption] = []
         for d in decisions:
             assert isinstance(d, Decision)
-            if d.source_span is not None:
-                cuts.append(
-                    AICut(
-                        span=AISpan(d.source_span[0], d.source_span[1]),
+            if d.source_span is None:
+                continue
+            span = AISpan(d.source_span[0], d.source_span[1])
+            if d.kind == "cut":
+                cuts.append(AICut(span=span, id=d.id, reason=d.rationale, extra=dict(d.params)))
+            elif d.kind == "caption":
+                captions.append(
+                    AICaption(
+                        span=span,
                         id=d.id,
-                        reason=d.rationale,
+                        primary_text=str(d.params.get("primary") or ""),
+                        support_text=(
+                            str(d.params["support"]) if d.params.get("support") else None
+                        ),
                         extra=dict(d.params),
                     )
                 )
@@ -601,11 +609,13 @@ class MainWindow(QMainWindow):
             provider="transcript_edit",
             prompt="Transcript edits (user-deleted blocks)",
             cuts=cuts,
+            captions=captions,
         )
         self._refresh_ai_table()
-        self.btn_ai_render.setEnabled(bool(cuts))
+        self.btn_ai_render.setEnabled(bool(cuts or captions))
         self.statusBar().showMessage(
-            f"Transcript edits: {len(decisions)} cut(s) proposed — review in the AI panel.",
+            f"Transcript edits: {len(cuts)} cut(s), {len(captions)} caption(s) "
+            "proposed — review in the AI panel.",
             10000,
         )
 
@@ -716,6 +726,8 @@ class MainWindow(QMainWindow):
                 out_path=Path(out),
                 burn_captions=self.chk_captions.isChecked(),
                 crf=crf,
+                transcript_captions=self.chk_ai_captions.isChecked(),
+                caption_style=self.cmb_caption_style.currentText() or None,
             )
         )
         worker.progress.connect(self._on_render_progress)

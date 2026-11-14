@@ -175,12 +175,13 @@ def check_invariants(edl: EditDecisionList) -> list[str]:
             if not d.rationale.strip():
                 problems.append(f"{d.id}: cut without rationale (not inspectable)")
         overlay_kinds = ("caption", "callout", "section_title", "diagram_slot", "emphasis")
-        # AI-proposed items (params["origin"] == "ai") are justified by the
-        # AI plan rationale instead of a script line.
+        # AI/transcript-proposed items (params["origin"] in {"ai",
+        # "transcript_edit"}) are justified by the plan/diff rationale
+        # instead of a script line.
         if (
             d.kind in overlay_kinds
             and d.source_line is None
-            and d.params.get("origin") != "ai"
+            and d.params.get("origin") not in ("ai", "transcript_edit")
         ):
             problems.append(f"{d.id}: {d.kind} not tied to a script line")
     return problems

@@ -64,6 +64,7 @@ def key_env_var_for(provider: str) -> str | None:
     """The environment variable that carries this provider's API key, if any."""
     return PROVIDER_KEY_ENV_VARS.get(provider)
 
+
 DEFAULT_TIMEOUT_SECONDS = 30.0
 
 _MASK = "********"
@@ -106,9 +107,7 @@ def _read_config_file(config_path: Path) -> dict[str, object]:
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise ProviderConfigError(
-            f"AI config file {config_path} is not valid JSON: {exc}"
-        ) from exc
+        raise ProviderConfigError(f"AI config file {config_path} is not valid JSON: {exc}") from exc
     if not isinstance(data, dict):
         raise ProviderConfigError(
             f"AI config file {config_path} must contain a JSON object at the top level"

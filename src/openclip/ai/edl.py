@@ -334,8 +334,14 @@ def _parse_caption(data: object, context: str) -> AICaption:
     item = _as_dict(data, context)
     span, span_extra = _parse_span(item, context)
     known = {
-        "span", "start_seconds", "end_seconds",
-        "id", "primary_text", "support_text", "style", "extra",
+        "span",
+        "start_seconds",
+        "end_seconds",
+        "id",
+        "primary_text",
+        "support_text",
+        "style",
+        "extra",
     }
     return AICaption(
         span=span,
@@ -415,6 +421,7 @@ def _parse_export(data: object, context: str) -> AIExport:
     vertical = item.get("vertical")
     if vertical is not None and not isinstance(vertical, bool):
         raise AIPlanError(f"{context}.vertical must be a boolean, got {type(vertical).__name__}")
+
     def _as_opt_int(raw: object) -> int | None:
         return raw if isinstance(raw, int) and not isinstance(raw, bool) else None
 
@@ -459,9 +466,7 @@ def parse_ai_plan(data: object) -> AIDirectorPlan:
     if isinstance(version, bool) or not isinstance(version, int):
         raise AIPlanError(f"plan.version must be an integer, got {type(version).__name__}")
     if version != AI_PLAN_SCHEMA_VERSION:
-        raise AIPlanError(
-            f"unsupported plan version {version} (expected {AI_PLAN_SCHEMA_VERSION})"
-        )
+        raise AIPlanError(f"unsupported plan version {version} (expected {AI_PLAN_SCHEMA_VERSION})")
     provider = plan.get("provider")
     if not isinstance(provider, str) or not provider:
         raise AIPlanError("plan is missing required non-empty field 'provider'")

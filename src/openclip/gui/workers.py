@@ -75,6 +75,8 @@ class AIRenderRequest:
     out_path: Path
     burn_captions: bool = True
     crf: int = 20
+    transcript_captions: bool = False  # burn transcript-derived bilingual captions
+    caption_style: str | None = None  # STYLE_TEMPLATES name
 
 
 class AIRenderWorker(QObject):
@@ -102,6 +104,8 @@ class AIRenderWorker(QObject):
                 RenderOptions(
                     burn_captions=self._request.burn_captions,
                     crf=self._request.crf,
+                    transcript_captions=self._request.transcript_captions,
+                    caption_style=self._request.caption_style,
                 ),
                 progress=lambda stage, i, n: self.progress.emit(stage, i, n),
             )

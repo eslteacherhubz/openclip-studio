@@ -77,9 +77,7 @@ def test_analysis_populates_cut_table(window) -> None:
     from openclip.engine.synth import SynthLesson, lesson_plan, lesson_word_hypotheses
 
     segments, total = lesson_plan()
-    script_text = "\n\n".join(
-        f"{s.primary} :: {s.support}" for s in segments if s.kind == "speech"
-    )
+    script_text = "\n\n".join(f"{s.primary} :: {s.support}" for s in segments if s.kind == "speech")
     window.script_edit.setPlainText(script_text)
     window._sync_script_into_project()
     synth = SynthLesson(path=window.media.path, duration_s=total, segments=segments)
@@ -137,9 +135,12 @@ def test_ai_review_table_populates_and_toggles(window) -> None:
 
     decisions = ai_plan_to_director_decisions(plan)
     assert all(d.status == "pending" for d in decisions)
-    assert len(decisions) == len(json.loads(json.dumps(plan.to_dict()))["clips"]) + sum(
-        len(plan.to_dict()[k]) for k in ("cuts", "captions", "broll", "zooms")
-    ) + 2  # audio + export
+    assert (
+        len(decisions)
+        == len(json.loads(json.dumps(plan.to_dict()))["clips"])
+        + sum(len(plan.to_dict()[k]) for k in ("cuts", "captions", "broll", "zooms"))
+        + 2
+    )  # audio + export
 
 
 def test_ai_panel_has_byok_provider_selector_and_secure_key(window) -> None:
@@ -182,22 +183,27 @@ def test_transcript_editor_apply_feeds_ai_review(window) -> None:
     window.transcript_edit.setPlainText("Hello class\n\nThird line")  # deleted block 2
     window.apply_transcript_edits()
 
-    assert len(window._transcript_decisions) == 1
-    decision = window._transcript_decisions[0]
-    assert decision.kind == "cut"
-    assert decision.source_span == (2.0, 4.0)
+    cuts = [d for d in window._transcript_decisions if d.kind == "cut"]
+    captions = [d for d in window._transcript_decisions if d.kind == "caption"]
+    assert len(cuts) == 1
+    assert cuts[0].source_span == (2.0, 4.0)
+    # kept blocks auto-generate caption decisions (Objective 1)
+    assert len(captions) == 2
+    assert {c.source_span for c in captions} == {(0.0, 2.0), (4.0, 6.0)}
 
     # the cut is surfaced in the AI review panel, pending, accepted-by-default checkbox
-    assert window.ai_table.rowCount() == 1
-    assert window.ai_table.item(0, 1).text() == "cut"
-    assert "Second line" in window.ai_table.item(0, 4).text()
+    assert window.ai_table.rowCount() == 3  # 1 cut + 2 captions
+    kinds = {window.ai_table.item(r, 1).text() for r in range(3)}
+    assert kinds == {"cut", "caption"}
+    cut_row = next(r for r in range(3) if window.ai_table.item(r, 1).text() == "cut")
+    assert "Second line" in window.ai_table.item(cut_row, 4).text()
     assert window.btn_ai_render.isEnabled()
 
     # rejecting the row is reflected in the acceptance list
     from PySide6.QtCore import Qt
 
-    window.ai_table.item(0, 0).setCheckState(Qt.CheckState.Unchecked)
-    assert window._ai_acceptance() == [False]
+    window.ai_table.item(cut_row, 0).setCheckState(Qt.CheckState.Unchecked)
+    assert window._ai_acceptance()[cut_row] is False
 
 
 def test_transcript_editor_no_deletions(window) -> None:
@@ -205,9 +211,10 @@ def test_transcript_editor_no_deletions(window) -> None:
     window._original_transcript = original
     window.transcript_edit.setPlainText("Only line")
     window.apply_transcript_edits()
-    assert window._transcript_decisions == []
-    assert window.ai_table.rowCount() == 0
-    assert not window.btn_ai_render.isEnabled()
+    # no cuts, but the single kept block still yields one caption decision
+    assert [d.kind for d in window._transcript_decisions] == ["caption"]
+    assert window.ai_table.rowCount() == 1
+    assert window.btn_ai_render.isEnabled()
 
 
 def test_gui_entry_declines_without_media() -> None:

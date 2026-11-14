@@ -28,6 +28,7 @@ from openclip.ai.render_primitives import (
     build_caption_filter,
     build_export_config_args,
     build_zoom_vf,
+    get_caption_style,
 )
 from openclip.director.models import Decision, EditDecisionList, check_invariants
 from openclip.engine.align import Alignment, alignment_from_dict
@@ -88,9 +89,7 @@ def callout_event(decision: Decision, export_span: tuple[float, float]) -> str:
         tag = r"{\fad(150,150)\fscx80\fscy80\t(0,150,\fscx100\fscy100)}"
         margin = _SAFE_MARGIN_V
     safe_text = text.replace("\n", " ")
-    return (
-        f"Dialogue: 2,{start},{end},Callout,,0,0,{margin},,{tag}{safe_text}"
-    )
+    return f"Dialogue: 2,{start},{end},Callout,,0,0,{margin},,{tag}{safe_text}"
 
 
 def _accepted_caption_lines(
@@ -143,9 +142,7 @@ def compose_ass(
     accepted = edl.accepted()
     caption_decisions = [d for d in accepted if d.kind == "caption"]
     overlay_decisions = [
-        d
-        for d in accepted
-        if d.kind in ("callout", "section_title") and d.source_span is not None
+        d for d in accepted if d.kind in ("callout", "section_title") and d.source_span is not None
     ]
     if not caption_decisions and not overlay_decisions:
         return None
@@ -160,9 +157,7 @@ def compose_ass(
             from openclip.engine.render import map_alignment
 
             mapped = map_alignment(selected, cuts)
-            events.extend(
-                caption_events(script_entries, mapped, res_x, res_y, project.captions)
-            )
+            events.extend(caption_events(script_entries, mapped, res_x, res_y, project.captions))
 
     for d in overlay_decisions:
         assert d.source_span is not None
@@ -289,9 +284,7 @@ def render_edl(
             Path(str(asset_raw)) if isinstance(asset_raw, str) and asset_raw.strip() else None
         )
         if asset_path is None or not asset_path.exists():
-            logger.warning(
-                "Skipping broll decision %s: asset %r is missing", d.id, asset_raw
-            )
+            logger.warning("Skipping broll decision %s: asset %r is missing", d.id, asset_raw)
             continue
         span = d.source_span
         if span is None:
@@ -337,7 +330,9 @@ def render_edl(
                 )
             )
         if blocks:
-            caption_filter = build_caption_filter(blocks, target_res)
+            caption_filter = build_caption_filter(
+                blocks, target_res, get_caption_style(opts.caption_style)
+            )
 
     audio_preset = opts.audio_preset or project.audio_preset
     audio_chain = build_audio_filter(audio_preset) if media.has_audio else None
@@ -356,9 +351,7 @@ def render_edl(
         if chain is not None:
             audio_chain = chain
 
-    ass_text = compose_ass(
-        project, media, cut_spans, edl, burn_captions=opts.burn_captions
-    )
+    ass_text = compose_ass(project, media, cut_spans, edl, burn_captions=opts.burn_captions)
     return render_export(
         media=media,
         kept=kept,
