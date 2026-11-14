@@ -244,4 +244,34 @@ background worker (`AIPlanWorker`, provider `local_mock` offline / BYOK env
 keys for real providers) → proposals appear as an Accept/Reject table (all
 PENDING, checked = accept) → **Accept && Render AI…** marks checked rows
 accepted, the rest rejected, and renders via `AIRenderWorker` →
-`render_edl`. Nothing renders without explicit review.
+`render_edl`. Nothing renders without explicit review. The panel has a
+**provider selector** (`local_mock`, `openai`, `mistral`, `anthropic`,
+`replicate`, `elevenlabs`, `ollama`) and a **password-masked BYOK API-key
+field**; the key is passed in-memory to `AIPlanWorker` as an env override
+for that call only — never logged or persisted (`provider_env_overrides` in
+`src/openclip/gui/workers.py`). `ollama` runs locally
+(`http://localhost:11434/v1`, OpenAI-compatible) and needs no key, like
+`local_mock`.
+
+## Transcript-based editing (edit video by editing text)
+
+`src/openclip/ai/transcript_editing.py` implements
+`transcript_to_edits(original, edited) -> list[Decision]`: blocks present in
+the original timestamped transcript but missing from the edited one become
+pending `cut` decisions at their original media timestamps. Matching is exact
+on normalized text, then fuzzy (rapidfuzz ratio ≥ 90) so slightly reworded
+blocks still count as kept; additions never create cuts; blocks without valid
+timestamps are skipped with a logged warning; an empty original/edited
+transcript logs a warning and never crashes.
+
+CLI:
+
+```bash
+openclip ai-edit-transcript --media lesson.mp4 \
+    --original original.json --transcript edited.json -o out.mp4 [--dry-run]
+```
+
+The edited transcript is the review: generated cuts are auto-accepted and
+rendered. `--dry-run` prints the EDL JSON without rendering. If the edit
+would delete every timestamped block (nothing left to render), the command
+exits with code 2 and a clear message instead of crashing.
