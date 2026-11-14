@@ -222,10 +222,59 @@ class TestExecutorWiring:
         overlay = overlays[0]
         # source span 4–6s with cut 2–3s → export timeline 3–5s
         assert "between(t,3.000,5.000)" in overlay.segment
-        assert "scale=320:180" in overlay.segment
+        # broll pads to the export_config TARGET resolution (640x360), not source
+        assert "scale=640:360" in overlay.segment
+        assert "pad=640:360" in overlay.segment
         filters = captured["video_filters"]
         assert isinstance(filters, list) and filters[-1] == "scale=640:360"
         assert captured["out_fps"] == 30.0
+
+    def test_clip_reshapes_timeline(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from openclip.director import executor
+
+        captured: dict[str, object] = {}
+
+        def _fake(**kwargs: object) -> RenderResult:
+            captured.update(kwargs)
+            return RenderResult(
+                out=Path(str(kwargs["out_path"])), kept_duration_s=4.0, segments=1,
+                cuts_applied=2, captions_burned=False, audio_enhanced=False,
+            )
+
+        monkeypatch.setattr(executor, "render_export", _fake)
+        project, media = self._project_media(tmp_path)
+        decisions = [
+            Decision(
+                id="keep1", kind="clip", source_span=(2.0, 6.0), rationale="keep this",
+                status="accepted",
+            ),
+            Decision(
+                id="c1", kind="cut", source_span=(3.0, 4.0), rationale="filler inside clip",
+                status="accepted",
+            ),
+            Decision(
+                id="z1", kind="zoom", source_span=(5.0, 6.0), params={"strength": 0.5},
+                rationale="zoom in clip", status="accepted",
+            ),
+            Decision(
+                id="z2", kind="zoom", source_span=(10.0, 12.0), params={"strength": 0.5},
+                rationale="zoom outside clip", status="accepted",
+            ),
+        ]
+        edl = EditDecisionList(project_source="in.mp4", decisions=decisions)
+        render_edl(project, media, edl, tmp_path / "out.mp4")
+
+        # kept = clip span minus inner cut; everything outside the clip removed
+        assert captured["kept"] == [(2.0, 3.0), (4.0, 6.0)]
+        assert captured["cut_spans"] == [(0.0, 2.0), (3.0, 4.0), (6.0, 14.0)]
+        # zoom inside the clip: source 5–6s, removed before it = (0,2)+(3,4) = 3s
+        # → export span 2–3s → frames 50–75 at default 25 fps;
+        # zoom outside the clip is dropped entirely
+        filters = captured["video_filters"]
+        assert isinstance(filters, list) and len(filters) == 1
+        assert "between(on,50,75)" in str(filters[0])
 
     def test_unimplemented_ai_kinds_still_skipped(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -426,6 +475,20 @@ class TestRealRender:
         info = probe(out)
         assert (info.width, info.height) == (160, 90)
         assert abs(info.fps - 30.0) < 0.5
+
+    def test_clip_only_renders_clip_span(self, lesson: Path, tmp_path: Path) -> None:
+        project = Project.create(source=lesson, script_text="")
+        media = probe(lesson)
+        decision = Decision(
+            id="keep1", kind="clip", source_span=(4.0, 8.0),
+            rationale="keep only the key example", status="accepted",
+        )
+        out = tmp_path / "clip.mp4"
+        result = render_edl(project, media, self._edl_with(decision), out)
+        info = probe(out)
+        assert abs(info.duration_s - 4.0) < 0.5  # only the 4–8s span survives
+        assert (info.width, info.height) == (320, 180)
+        assert result.cuts_applied == 2  # [0,4) and [8,14] removed
 
     def test_export_config_vertical_916(self, lesson: Path, tmp_path: Path) -> None:
         project = Project.create(source=lesson, script_text="")

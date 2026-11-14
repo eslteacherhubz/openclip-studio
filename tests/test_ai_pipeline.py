@@ -213,7 +213,7 @@ class TestDirectorExtension:
             ),
             Decision(
                 id="c1", kind="clip", source_span=(0.0, 5.0),
-                rationale="keep", status="accepted",
+                rationale="keep only 0-5s", status="accepted",
             ),
             Decision(
                 id="a1", kind="audio_enhance", rationale="denoise", status="accepted"
@@ -223,7 +223,9 @@ class TestDirectorExtension:
         edl = EditDecisionList(project_source="in.mp4", decisions=decisions)
         result = executor.render_edl(project, media, edl, tmp_path / "out.mp4")
         assert result.out == tmp_path / "out.mp4"
-        assert captured["cut_spans"] == []  # no cuts accepted; nothing removed
+        # clip 0–5s accepted → everything outside it is removed (Phase 6)
+        assert captured["cut_spans"] == [(5.0, 10.0)]
+        assert captured["kept"] == [(0.0, 5.0)]
 
     def test_executor_still_raises_for_legacy_unsupported(self, tmp_path: Path) -> None:
         from openclip.director import executor

@@ -78,5 +78,5 @@ def test_ai_edit_auto_accept_renders_mp4(lesson: Path, tmp_path: Path) -> None:
     assert out.exists() and out.stat().st_size > 0
     info = probe(out)
     assert (info.width, info.height) == (320, 180)
-    # mock plan cuts 2.0–3.0s from the 14s lesson → ~13s kept
-    assert 12.0 < info.duration_s < 14.0
+    # mock plan keeps only the clip span 0–10s and cuts 2.0–3.0s inside it → ~9s
+    assert 8.0 < info.duration_s < 10.0

@@ -51,12 +51,11 @@ logger = logging.getLogger(__name__)
 
 _UNSUPPORTED = ("diagram_slot", "color_preset", "reframe", "background", "emphasis")
 
-#: AI Director kinds with no render primitive yet. Accepted decisions of these
-#: kinds are SAFELY SKIPPED (logged warning) — the export never crashes on them.
-#: "zoom" (punch-in), "audio_enhance" (denoise/loudnorm), "broll" (overlay) and
-#: "export_config" (resolution/fps) ARE rendered; "cut"/"caption"/"callout"/
-#: "section_title" rendering is untouched. "clip" is a keep-marker only.
-_AI_SKIPPED_KINDS = ("clip",)
+#: AI Director kinds with no render primitive yet (currently none — all AI
+#: kinds render or are safely skipped individually, e.g. broll with a missing
+#: asset). Kept for forward compatibility; "cut"/"caption"/"callout"/
+#: "section_title" rendering is untouched.
+_AI_SKIPPED_KINDS: tuple[str, ...] = ()
 
 _SAFE_MARGIN_V = 140  # callout/title band: below the caption block
 
@@ -218,6 +217,7 @@ def render_edl(
         )
 
     opts = options or RenderOptions()
+    base_res = (media.width or 1280, media.height or 720)
     cut_spans = normalize_cut_spans(
         [
             (d.source_span[0], d.source_span[1])
@@ -225,18 +225,30 @@ def render_edl(
             if d.kind == "cut" and d.source_span is not None
         ]
     )
+    clip_spans = normalize_cut_spans(
+        [
+            (d.source_span[0], d.source_span[1])
+            for d in accepted
+            if d.kind == "clip" and d.source_span is not None
+        ]
+    )
+    if clip_spans:
+        # "clip" = keep ONLY these spans: everything outside them is removed,
+        # so the export timeline condenses to the clip spans (minus any cuts
+        # inside them). Overlays are mapped through the combined removed set.
+        outside = _complement_spans(clip_spans, media.duration_s)
+        cut_spans = normalize_cut_spans(cut_spans + outside)
     kept = kept_intervals_from_spans(cut_spans, media.duration_s)
 
     # AI zoom decisions: map source-timeline spans to the export timeline and
     # build deterministic punch-in filters.
     video_filters: list[str] = []
-    base_res = (media.width or 1280, media.height or 720)
     for d in accepted:
         if d.kind != "zoom" or d.source_span is None:
             continue
         export_span = map_span(d.source_span[0], d.source_span[1], cut_spans)
         if export_span is None:
-            continue  # zoom fully removed by cuts
+            continue  # zoom outside clips / fully removed by cuts
         strength_raw = d.params.get("strength")
         strength = (
             float(strength_raw)
@@ -247,7 +259,23 @@ def render_edl(
             build_zoom_vf(export_span, base_res[0], base_res[1], strength, media.fps or 25.0)
         )
 
-    # AI broll decisions: overlay the referenced asset during the mapped span.
+    # AI export_config: apply target resolution (with 9:16 center-crop when
+    # vertical) as the last video filter, and the target fps as output -r.
+    # Computed BEFORE broll so overlays pad to the *target* resolution (the
+    # export scale runs on the main chain first, then broll layers on top).
+    out_fps: float | None = None
+    target_res = base_res
+    export_decisions = [d for d in accepted if d.kind == "export_config"]
+    if export_decisions:
+        cfg = build_export_config_args(export_decisions[-1])  # ordered; last wins
+        if cfg.vf is not None:
+            video_filters.append(cfg.vf)
+        out_fps = cfg.fps
+        if cfg.width is not None and cfg.height is not None:
+            target_res = (cfg.width, cfg.height)
+
+    # AI broll decisions: overlay the referenced asset during the mapped span,
+    # scaled/padded to the target (post-export-config) resolution.
     # Missing/invalid assets are dropped with a warning, never crash the render.
     broll_overlays: list[BrollOverlay] = []
     prev_label = "base0"
@@ -268,9 +296,9 @@ def render_edl(
             continue
         export_span = map_span(span[0], span[1], cut_spans)
         if export_span is None:
-            continue  # broll span fully removed by cuts
+            continue  # broll span outside clips / fully removed by cuts
         export_decision = replace(d, source_span=export_span)
-        segment, out_label = build_broll_filter(export_decision, base_res, index + 1, prev_label)
+        segment, out_label = build_broll_filter(export_decision, target_res, index + 1, prev_label)
         broll_overlays.append(
             BrollOverlay(
                 asset=asset_path,
@@ -281,16 +309,6 @@ def render_edl(
             )
         )
         prev_label = out_label
-
-    # AI export_config: apply target resolution (with 9:16 center-crop when
-    # vertical) as the last video filter, and the target fps as output -r.
-    out_fps: float | None = None
-    export_decisions = [d for d in accepted if d.kind == "export_config"]
-    if export_decisions:
-        cfg = build_export_config_args(export_decisions[-1])  # ordered; last wins
-        if cfg.vf is not None:
-            video_filters.append(cfg.vf)
-        out_fps = cfg.fps
 
     audio_preset = opts.audio_preset or project.audio_preset
     audio_chain = build_audio_filter(audio_preset) if media.has_audio else None
@@ -340,3 +358,14 @@ def kept_intervals_from_spans(
         for s, e in normalized
     ]
     return engine_kept(fake, duration_s)
+
+
+def _complement_spans(
+    spans: list[tuple[float, float]], duration_s: float
+) -> list[tuple[float, float]]:
+    """Gaps between normalized `spans` over [0, duration] (i.e. what is NOT kept).
+
+    ``kept_intervals_from_spans`` already returns the complement of its input,
+    so this is a thin, explicit wrapper.
+    """
+    return kept_intervals_from_spans(spans, duration_s)
