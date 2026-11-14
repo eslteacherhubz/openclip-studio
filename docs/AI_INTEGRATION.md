@@ -216,3 +216,32 @@ rendering**; with `--auto-accept` every proposal becomes an accepted
 `Decision` and `render_edl` renders the MP4 locally via FFmpeg. Real
 providers need their API key in the environment (BYOK); tests use
 `local_mock` only.
+
+## B-roll and export config rendering (Phase 5)
+
+- **`broll`** — `build_broll_filter(decision, base_resolution)` in
+  `src/openclip/ai/render_primitives.py` builds the exact filter_complex
+  segment: the asset (input N) is `scale`d to fit the base resolution with
+  aspect ratio preserved, `pad`ded to full frame, and `overlay`ed with
+  `enable='between(t,start,end)'` in export-timeline time — above the base
+  video, under burned-in captions (which are applied earlier in the main
+  chain). Image assets are looped for the span; video assets are read as-is.
+  A missing/invalid `asset` path drops the decision with a logged warning —
+  the render never crashes on it.
+- **`export_config`** — `build_export_config_args(decision)` maps
+  `width`/`height`/`fps`/`vertical` to a final-pass filter and output args:
+  `vertical: true` center-crops to 9:16 (`crop=w=trunc(ih*9/16/2)*2:h=ih`)
+  before `scale=WxH`; otherwise a plain `scale=WxH`; `fps` becomes `-r`.
+- `render_export()` gained optional `broll` (list of `BrollOverlay`) and
+  `out_fps` parameters — both default to `None`, so existing callers are
+  byte-identical. Only `clip` remains in the executor's safe-skip list.
+
+## GUI review integration
+
+The PySide6 GUI (`src/openclip/gui/main_window.py`) has an **AI Director
+proposals** panel: enter a prompt → **AI Plan…** runs `generate_plan()` on a
+background worker (`AIPlanWorker`, provider `local_mock` offline / BYOK env
+keys for real providers) → proposals appear as an Accept/Reject table (all
+PENDING, checked = accept) → **Accept && Render AI…** marks checked rows
+accepted, the rest rejected, and renders via `AIRenderWorker` →
+`render_edl`. Nothing renders without explicit review.

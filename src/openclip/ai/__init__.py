@@ -38,7 +38,11 @@ from openclip.ai.prompts import build_director_system_prompt, build_director_use
 from openclip.ai.providers import AIProvider, create_provider
 from openclip.ai.render_primitives import (
     DEFAULT_ZOOM_STRENGTH,
+    ExportConfigArgs,
     audio_chain_for_enhancement,
+    build_broll_filter,
+    build_export_config_args,
+    build_export_vf,
     build_zoom_vf,
 )
 from openclip.ai.review import AIReviewItem, ReviewStatus, plan_to_review_items
@@ -62,6 +66,7 @@ __all__ = [
     "AISpan",
     "AIZoom",
     "AnthropicClient",
+    "ExportConfigArgs",
     "MockAIProvider",
     "OpenAICompatibleClient",
     "ProviderConfig",
@@ -71,8 +76,11 @@ __all__ = [
     "ReviewStatus",
     "ai_plan_to_director_decisions",
     "audio_chain_for_enhancement",
+    "build_broll_filter",
     "build_director_system_prompt",
     "build_director_user_prompt",
+    "build_export_config_args",
+    "build_export_vf",
     "build_zoom_vf",
     "create_provider",
     "extract_json_object",

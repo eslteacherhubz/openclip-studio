@@ -54,6 +54,26 @@ class RenderResult:
     audio_enhanced: bool
 
 
+@dataclass
+class BrollOverlay:
+    """One B-roll layer for the final pass.
+
+    ``start_s``/``end_s`` are in export-timeline time. ``segment`` is the
+    prebuilt filter_complex fragment (see
+    :func:`openclip.ai.render_primitives.build_broll_filter`) and ``out_label``
+    the label it outputs; the render assembles ``[0:v]…[base0]; <segment>; …``.
+    """
+
+    asset: Path
+    start_s: float
+    end_s: float
+    segment: str
+    out_label: str
+
+
+_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+
+
 def normalize_cut_spans(
     cut_spans: list[tuple[float, float]],
 ) -> list[tuple[float, float]]:
@@ -166,13 +186,17 @@ def render_export(
     opts: RenderOptions,
     progress: ProgressFn | None = None,
     video_filters: list[str] | None = None,
+    broll: list[BrollOverlay] | None = None,
+    out_fps: float | None = None,
 ) -> RenderResult:
     """Execute kept intervals + one final pass (captions/audio) deterministically.
 
     Shared by `render_project` and the director executor. `ass_text` must
     already be in export-timeline time. `video_filters` are extra -vf stages
     (e.g. AI zoom punch-ins, already in export-timeline time) appended after
-    the caption burn; they force the video re-encode pass.
+    the caption burn; they force the video re-encode pass. `broll` overlays
+    extra assets via filter_complex (image assets are looped); `out_fps` sets
+    the output frame rate (`-r`) on the final pass.
     """
     out = Path(out_path)
     if out.parent != Path("."):
@@ -185,9 +209,9 @@ def render_export(
         master = workdir / "master.mp4"
         _concat(segments, master, media.has_audio)
 
-        need_video = ass_text is not None or bool(video_filters)
+        need_video = ass_text is not None or bool(video_filters) or bool(broll)
         need_audio = audio_chain is not None
-        if not need_video and not need_audio:
+        if not need_video and not need_audio and out_fps is None:
             shutil.move(str(master), str(out))
             captions_burned = False
         else:
@@ -206,6 +230,8 @@ def render_export(
                 crf=opts.crf,
                 preset=opts.x264_preset,
                 has_audio=media.has_audio,
+                broll=broll,
+                out_fps=out_fps,
             )
             captions_burned = True
         return RenderResult(
@@ -319,9 +345,39 @@ def _final_pass(
     crf: int,
     preset: str,
     has_audio: bool,
+    broll: list[BrollOverlay] | None = None,
+    out_fps: float | None = None,
 ) -> None:
     args = ["-y", "-i", str(master)]
-    if vf_graph:
+    overlays = list(broll or [])
+    for b in overlays:
+        if b.asset.suffix.lower() in _IMAGE_SUFFIXES:
+            # loop a still image for (just past) the overlay span
+            dur = max(b.end_s - b.start_s, 0.1) + 0.2
+            args += ["-loop", "1", "-t", f"{dur:.3f}", "-i", str(b.asset)]
+        else:
+            args += ["-i", str(b.asset)]
+    if overlays:
+        # One filter_complex: main chain (captions/zoom/export) on [0:v] into
+        # [base0], then each B-roll segment chains on top (under nothing else —
+        # captions were already burned into the main chain).
+        prefix = f"{vf_graph}," if vf_graph else "null"
+        parts = [f"[0:v]{prefix}[base0]", *(b.segment for b in overlays)]
+        args += [
+            "-filter_complex",
+            ";".join(parts),
+            "-map",
+            f"[{overlays[-1].out_label}]",
+            "-c:v",
+            "libx264",
+            "-preset",
+            preset,
+            "-crf",
+            str(crf),
+            "-pix_fmt",
+            "yuv420p",
+        ]
+    elif vf_graph:
         args += ["-vf", vf_graph]
         args += [
             "-c:v",
@@ -335,6 +391,8 @@ def _final_pass(
         ]
     else:
         args += ["-c:v", "copy"]
+    if out_fps is not None:
+        args += ["-r", f"{out_fps:.6f}"]
     if has_audio:
         if af_chain:
             args += ["-af", af_chain, "-c:a", "aac", "-b:a", "160k"]

@@ -35,7 +35,9 @@ def test_ai_edit_without_auto_accept_prints_review_json(
     assert payload["provider"] == "local_mock"
     assert "Make a short clip about the main topic" in payload["prompt"]
     assert "plan" in payload and "review" in payload
-    assert len(payload["review"]) >= 3  # mock plan: clip + cut + caption
+    # mock plan: clip + cut + caption + zoom + broll
+    kinds = {item["kind"] for item in payload["review"]}
+    assert {"clip", "cut", "caption", "zoom", "broll"} <= kinds
     assert all(item["status"] == "pending" for item in payload["review"])
     assert not out.exists()  # no render without --auto-accept
 

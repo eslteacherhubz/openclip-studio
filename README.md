@@ -77,6 +77,12 @@ script (`English :: 支持语言` blocks) → **Analyze** (local whisper if
 installed, else silence-only cuts) → review proposed cuts (uncheck to keep)
 → tune captions/audio settings → **Export MP4**.
 
+The desktop app also has an **AI Director** panel: type a prompt, press
+**AI Plan…** to get AI-proposed cuts/clips/zooms/B-roll/export settings as an
+accept/reject list, then **Accept && Render AI…** to render only what you
+accepted (offline `local_mock` by default; BYOK keys via env vars for real
+providers). Headless equivalent: `openclip ai-edit` (see Usage above).
+
 ## Windows desktop app
 
 CI builds a Windows package on every push (Actions → "package-windows" job →

@@ -66,5 +66,25 @@ class MockAIProvider:
                     "support_text": "Hola",
                 }
             ],
+            "zooms": [
+                {
+                    "start_seconds": 5.0,
+                    "end_seconds": 7.0,
+                    "mode": "smooth",
+                    "strength": 0.4,
+                }
+            ],
+            "broll": [
+                {
+                    "start_seconds": 8.0,
+                    "end_seconds": 10.0,
+                    "query": "classroom wide shot",
+                    "source": "stock",
+                    "mode": "cover",
+                    "asset": "assets/classroom.png",
+                }
+            ],
+            "audio": {"enabled": True, "denoise": True, "loudness_normalize": True},
+            "export": {"format": "mp4", "vertical": False},
         }
         return json.dumps(plan, ensure_ascii=False, sort_keys=True)

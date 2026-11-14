@@ -7,10 +7,89 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, Signal
 
-from openclip.engine.ffmpeg import MediaInfo, probe  # noqa: F401 (re-export convenience)
+from openclip.engine.ffmpeg import MediaInfo, probe
 from openclip.engine.pipeline import run_pipeline
 from openclip.engine.project import Project
 from openclip.engine.render import RenderOptions, render_project
+
+
+@dataclass
+class AIPlanRequest:
+    media_path: Path
+    prompt: str
+    transcript: str
+    provider: str = "local_mock"
+
+
+class AIPlanWorker(QObject):
+    """Runs the AI prompt-to-plan pipeline off the UI thread (BYOK keys come
+    from the environment via load_provider_config; tests use local_mock)."""
+
+    finished = Signal(object)  # AIDirectorPlan
+    failed = Signal(str)
+
+    def __init__(self, request: AIPlanRequest) -> None:
+        super().__init__()
+        self._request = request
+
+    def run(self) -> None:  # slot, executed on the worker thread
+        try:
+            from openclip.ai import create_provider, generate_plan, load_provider_config
+
+            media = probe(self._request.media_path)
+            provider = create_provider(load_provider_config(self._request.provider))
+            plan = generate_plan(
+                provider,
+                self._request.prompt,
+                self._request.transcript,
+                media.duration_s,
+            )
+            self.finished.emit(plan)
+        except Exception as exc:  # surfaced, not fatal to the app
+            self.failed.emit(str(exc))
+
+
+@dataclass
+class AIRenderRequest:
+    project: Project
+    media: MediaInfo
+    edl: object  # EditDecisionList — typed loosely to avoid a hard import here
+    out_path: Path
+    burn_captions: bool = True
+    crf: int = 20
+
+
+class AIRenderWorker(QObject):
+    """Renders an AI EDL (only accepted decisions execute) off the UI thread."""
+
+    finished = Signal(object)  # RenderResult
+    failed = Signal(str)
+    progress = Signal(str, int, int)  # stage, i, n
+
+    def __init__(self, request: AIRenderRequest) -> None:
+        super().__init__()
+        self._request = request
+
+    def run(self) -> None:  # slot, executed on the worker thread
+        try:
+            from openclip.director.executor import render_edl
+            from openclip.director.models import EditDecisionList
+
+            assert isinstance(self._request.edl, EditDecisionList)
+            result = render_edl(
+                self._request.project,
+                self._request.media,
+                self._request.edl,
+                self._request.out_path,
+                RenderOptions(
+                    burn_captions=self._request.burn_captions,
+                    crf=self._request.crf,
+                ),
+                progress=lambda stage, i, n: self.progress.emit(stage, i, n),
+            )
+            self.finished.emit(result)
+        except Exception as exc:
+            self.failed.emit(str(exc))
 
 
 @dataclass

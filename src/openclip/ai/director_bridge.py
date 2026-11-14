@@ -77,7 +77,11 @@ def ai_plan_to_director_decisions(plan: AIDirectorPlan) -> list[Decision]:
                 kind="broll",
                 source_span=(broll.span.start_seconds, broll.span.end_seconds),
                 params=_params(
-                    broll.extra, query=broll.query, source=broll.source, mode=broll.mode
+                    broll.extra,
+                    query=broll.query,
+                    source=broll.source,
+                    mode=broll.mode,
+                    asset=broll.extra.get("asset"),
                 ),
                 rationale=broll.query or f"AI-proposed B-roll {broll.id or index}",
                 status="pending",
