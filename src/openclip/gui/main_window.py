@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl, Signal
@@ -74,6 +75,8 @@ class MainWindow(QMainWindow):
         self._ai_plan_runner = ThreadedRunner()
         self._ai_render_runner = ThreadedRunner()
         self._ai_plan: object | None = None  # AIDirectorPlan
+        self._original_transcript: object | None = None  # parsed transcript JSON/text
+        self._transcript_decisions: list[object] = []  # Decision list from the diff
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -86,9 +89,10 @@ class MainWindow(QMainWindow):
 
         splitter.addWidget(self._build_script_panel())
         splitter.addWidget(self._build_review_panel())
+        splitter.addWidget(self._build_transcript_panel())
         splitter.addWidget(self._build_ai_panel())
         splitter.addWidget(self._build_settings_panel())
-        splitter.setSizes([340, 360, 300, 260])
+        splitter.setSizes([300, 320, 280, 300, 240])
 
         root.addWidget(self._build_player_bar())
         self.setStatusBar(QStatusBar())
@@ -145,6 +149,33 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.cut_table)
         note = QLabel("Uncheck a row to KEEP that span; checked rows are removed.")
         layout.addWidget(note)
+        return box
+
+    def _build_transcript_panel(self) -> QWidget:
+        box = QGroupBox("Transcript editing (edit text → propose cuts)")
+        layout = QVBoxLayout(box)
+        self.transcript_edit = QPlainTextEdit()
+        self.transcript_edit.setPlaceholderText(
+            "Original transcript text. Load a timestamped transcript JSON, or edit "
+            "the script-derived text here, then Apply Transcript Edits."
+        )
+        layout.addWidget(self.transcript_edit)
+        btn_row = QHBoxLayout()
+        self.btn_load_transcript = QPushButton("Load transcript…")
+        self.btn_apply_transcript = QPushButton("Apply Transcript Edits")
+        btn_row.addWidget(self.btn_load_transcript)
+        btn_row.addWidget(self.btn_apply_transcript)
+        layout.addLayout(btn_row)
+        hint = QLabel(
+            "Deleted blocks become proposed cuts, shown in the AI Director panel "
+            "for review before rendering."
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        self.btn_load_transcript.clicked.connect(self.load_transcript)
+        self.btn_apply_transcript.clicked.connect(self.apply_transcript_edits)
+        self.btn_load_transcript.setEnabled(False)
+        self.btn_apply_transcript.setEnabled(False)
         return box
 
     def _build_ai_panel(self) -> QWidget:
@@ -327,8 +358,22 @@ class MainWindow(QMainWindow):
         )
         self.player.setSource(QUrl.fromLocalFile(str(self.project.source)))
         self.slider.setRange(0, int(self.media.duration_s * 1000))
-        for btn in (self.btn_save, self.btn_analyze, self.btn_export, self.btn_ai_plan):
+        for btn in (
+            self.btn_save,
+            self.btn_analyze,
+            self.btn_export,
+            self.btn_ai_plan,
+            self.btn_load_transcript,
+            self.btn_apply_transcript,
+        ):
             btn.setEnabled(True)
+        if self.project.script.lines:
+            self.transcript_edit.setPlainText(
+                "\n\n".join(
+                    f"{ln.primary} :: {ln.support}" if ln.support else ln.primary
+                    for ln in self.project.script.lines
+                )
+            )
 
     # ---------- analysis / review / export ----------
 
@@ -494,6 +539,75 @@ class MainWindow(QMainWindow):
         if hasattr(self, "progress"):
             self.statusBar().removeWidget(self.progress)
             self.progress = None  # type: ignore[assignment]
+
+    # ---------- transcript editing ----------
+
+    def load_transcript(self) -> None:
+        """Load a timestamped transcript (JSON) or plain text into the editor."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open transcript", "", "Transcript (*.json *.txt);;All files (*)"
+        )
+        if not path:
+            return
+        from openclip.ai import parse_transcript
+
+        raw = Path(path).read_text(encoding="utf-8")
+        try:
+            data: object = json.loads(raw)
+        except ValueError:
+            data = raw
+        self._original_transcript = data
+        segments = parse_transcript(data)
+        self.transcript_edit.setPlainText(
+            "\n\n".join(s.text for s in segments if s.text.strip())
+        )
+        self.statusBar().showMessage(
+            f"Loaded transcript {Path(path).name}: {len(segments)} blocks"
+        )
+
+    def apply_transcript_edits(self) -> None:
+        """Diff the edited transcript against the original → proposed cut decisions.
+
+        The cuts are fed into the AI Director review panel (as a plan whose
+        only content is the transcript cuts), so the user sees exactly what
+        will be removed before rendering.
+        """
+        from openclip.ai import AICut, AIDirectorPlan, AISpan, transcript_to_edits
+        from openclip.director.models import Decision
+
+        original = self._original_transcript
+        if original is None:
+            # fall back to the script text (no timestamps → warnings, no cuts)
+            blocks = [b.strip() for b in self.script_edit.toPlainText().split("\n\n") if b.strip()]
+            original = {"segments": [{"text": b} for b in blocks]}
+        edited = self.transcript_edit.toPlainText()
+        decisions = transcript_to_edits(original, edited)
+        self._transcript_decisions = list(decisions)
+
+        cuts: list[AICut] = []
+        for d in decisions:
+            assert isinstance(d, Decision)
+            if d.source_span is not None:
+                cuts.append(
+                    AICut(
+                        span=AISpan(d.source_span[0], d.source_span[1]),
+                        id=d.id,
+                        reason=d.rationale,
+                        extra=dict(d.params),
+                    )
+                )
+        self._ai_plan = AIDirectorPlan(
+            version=1,
+            provider="transcript_edit",
+            prompt="Transcript edits (user-deleted blocks)",
+            cuts=cuts,
+        )
+        self._refresh_ai_table()
+        self.btn_ai_render.setEnabled(bool(cuts))
+        self.statusBar().showMessage(
+            f"Transcript edits: {len(decisions)} cut(s) proposed — review in the AI panel.",
+            10000,
+        )
 
     # ---------- AI Director: plan → review → render ----------
 

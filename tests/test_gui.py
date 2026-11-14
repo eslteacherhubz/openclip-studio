@@ -170,6 +170,46 @@ def test_provider_env_overrides_maps_byok_key() -> None:
     assert provider_env_overrides("local_mock", "x") == {}
 
 
+def test_transcript_editor_apply_feeds_ai_review(window) -> None:
+    original = {
+        "segments": [
+            {"text": "Hello class", "start": 0.0, "end": 2.0},
+            {"text": "Second line", "start": 2.0, "end": 4.0},
+            {"text": "Third line", "start": 4.0, "end": 6.0},
+        ]
+    }
+    window._original_transcript = original
+    window.transcript_edit.setPlainText("Hello class\n\nThird line")  # deleted block 2
+    window.apply_transcript_edits()
+
+    assert len(window._transcript_decisions) == 1
+    decision = window._transcript_decisions[0]
+    assert decision.kind == "cut"
+    assert decision.source_span == (2.0, 4.0)
+
+    # the cut is surfaced in the AI review panel, pending, accepted-by-default checkbox
+    assert window.ai_table.rowCount() == 1
+    assert window.ai_table.item(0, 1).text() == "cut"
+    assert "Second line" in window.ai_table.item(0, 4).text()
+    assert window.btn_ai_render.isEnabled()
+
+    # rejecting the row is reflected in the acceptance list
+    from PySide6.QtCore import Qt
+
+    window.ai_table.item(0, 0).setCheckState(Qt.CheckState.Unchecked)
+    assert window._ai_acceptance() == [False]
+
+
+def test_transcript_editor_no_deletions(window) -> None:
+    original = {"segments": [{"text": "Only line", "start": 0.0, "end": 2.0}]}
+    window._original_transcript = original
+    window.transcript_edit.setPlainText("Only line")
+    window.apply_transcript_edits()
+    assert window._transcript_decisions == []
+    assert window.ai_table.rowCount() == 0
+    assert not window.btn_ai_render.isEnabled()
+
+
 def test_gui_entry_declines_without_media() -> None:
     if not _qt_available():
         pytest.skip("PySide6 (gui extra) not installed")
