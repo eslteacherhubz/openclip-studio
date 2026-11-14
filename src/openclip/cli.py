@@ -221,7 +221,7 @@ def _cmd_ai_edit(args: argparse.Namespace) -> int:
         media,
         edl,
         args.out,
-        RenderOptions(burn_captions=False),
+        RenderOptions(burn_captions=False, transcript_captions=args.captions),
     )
     print(
         f"Exported: {result.out}\n"
@@ -419,6 +419,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--auto-accept",
         action="store_true",
         help="accept all AI proposals and render; without it, prints review JSON only",
+    )
+    sp.add_argument(
+        "--captions",
+        action="store_true",
+        help="with --auto-accept: burn the plan's bilingual captions (inline drawtext)",
     )
     sp.set_defaults(func=_cmd_ai_edit)
 

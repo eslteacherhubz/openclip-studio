@@ -15,14 +15,22 @@ FFmpeg filter strings that the director executor appends to the final pass.
 - ``export_config`` → `build_export_config_args` maps width/height/fps/vertical
   to a final-pass scale/crop filter (9:16 center-crop when ``vertical``) plus
   an output ``-r`` fps.
+- transcript captions → `build_caption_filter` builds self-contained `drawtext`
+  filters (no temp .srt/.ass files) for the kept transcript blocks, bilingual
+  stacked (original above translation), white text with black outline,
+  bottom-center with safe margins.
 """
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from openclip.director.models import Decision
 from openclip.engine.enhance import PRESETS
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_ZOOM_STRENGTH = 0.2
 DEFAULT_FPS = 25.0
@@ -172,3 +180,98 @@ def build_export_config_args(decision: Decision) -> ExportConfigArgs:
         height=height,
         vertical=vertical,
     )
+
+
+# ---------------------------------------------------------------------------
+# Transcript captions (burned-in, self-contained drawtext chain)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class CaptionBlock:
+    """One kept transcript block to burn in (times in export timeline)."""
+
+    text: str
+    start_s: float
+    end_s: float
+    translation: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, object], context: str = "caption") -> CaptionBlock:
+        text = str(data.get("text") or data.get("primary") or "")
+        translation_raw = data.get("translation") or data.get("support")
+        start = data.get("start", data.get("start_s"))
+        end = data.get("end", data.get("end_s"))
+        if not text.strip():
+            raise ValueError(f"{context}: empty text")
+        if (
+            isinstance(start, bool)
+            or isinstance(end, bool)
+            or not isinstance(start, (int, float))
+            or not isinstance(end, (int, float))
+            or not (0.0 <= float(start) < float(end))
+        ):
+            raise ValueError(f"{context}: invalid timestamps {start!r}..{end!r}")
+        return cls(
+            text=text,
+            start_s=float(start),
+            end_s=float(end),
+            translation=str(translation_raw) if isinstance(translation_raw, str) else None,
+        )
+
+
+def _escape_drawtext(text: str) -> str:
+    """Escape text for a drawtext `text=` option and flatten newlines."""
+    flattened = " ".join(text.split())
+    for char in ("\\", "'", ":", ",", ";", "[", "]", "%"):
+        flattened = flattened.replace(char, "\\" + char)
+    return flattened
+
+
+def build_caption_filter(
+    kept_transcript_blocks: Sequence[CaptionBlock | dict[str, object]],
+    target_resolution: tuple[int, int],
+) -> str | None:
+    """Build a deterministic `drawtext` chain burning the kept caption blocks.
+
+    Each block becomes one `drawtext` (original language) plus, when a
+    translation is present, a second stacked below it (target language).
+    Styling: white text, black outline, bottom-center, safe margin. Times are
+    export-timeline seconds. Blocks with empty text or invalid timestamps are
+    skipped with a warning. Returns None when nothing is burnable. No temp
+    files — the whole chain is inline.
+    """
+    _width, height = target_resolution
+    fontsize = max(12, int(height * 0.06))
+    margin = max(8, int(height * 0.05))
+    filters: list[str] = []
+    for index, raw in enumerate(kept_transcript_blocks):
+        try:
+            block = raw if isinstance(raw, CaptionBlock) else CaptionBlock.from_dict(raw)
+        except ValueError as exc:
+            logger.warning("caption block %d skipped: %s", index, exc)
+            continue
+        enable = f"enable='between(t,{block.start_s:.3f},{block.end_s:.3f})'"
+        base = (
+            f"drawtext=font='Sans':text='{{}}'"
+            f":fontsize={fontsize}:fontcolor=white:borderw=2:bordercolor=black"
+            f":x=(w-text_w)/2"
+        )
+        if block.translation and block.translation.strip():
+            # stacked: original on top, translation below it
+            y_top = height - 2 * fontsize - margin
+            y_bottom = height - fontsize - margin
+            filters.append(
+                base.replace("{}", _escape_drawtext(block.text), 1)
+                + f":y={y_top}:{enable}"
+            )
+            filters.append(
+                base.replace("{}", _escape_drawtext(block.translation), 1)
+                + f":y={y_bottom}:{enable}"
+            )
+        else:
+            filters.append(
+                base.replace("{}", _escape_drawtext(block.text), 1)
+                + f":y={height - fontsize - margin}:{enable}"
+            )
+    return ",".join(filters) if filters else None

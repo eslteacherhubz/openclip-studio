@@ -42,6 +42,7 @@ class RenderOptions:
     burn_captions: bool = True
     audio_preset: str | None = None  # None → use project.audio_preset
     keep_workdir: bool = False
+    transcript_captions: bool = False  # burn AI/transcript caption drawtext chain
 
 
 @dataclass
@@ -188,6 +189,7 @@ def render_export(
     video_filters: list[str] | None = None,
     broll: list[BrollOverlay] | None = None,
     out_fps: float | None = None,
+    caption_filter: str | None = None,
 ) -> RenderResult:
     """Execute kept intervals + one final pass (captions/audio) deterministically.
 
@@ -209,7 +211,12 @@ def render_export(
         master = workdir / "master.mp4"
         _concat(segments, master, media.has_audio)
 
-        need_video = ass_text is not None or bool(video_filters) or bool(broll)
+        need_video = (
+            ass_text is not None
+            or bool(video_filters)
+            or bool(broll)
+            or caption_filter is not None
+        )
         need_audio = audio_chain is not None
         if not need_video and not need_audio and out_fps is None:
             shutil.move(str(master), str(out))
@@ -232,6 +239,7 @@ def render_export(
                 has_audio=media.has_audio,
                 broll=broll,
                 out_fps=out_fps,
+                caption_filter=caption_filter,
             )
             captions_burned = True
         return RenderResult(
@@ -347,6 +355,7 @@ def _final_pass(
     has_audio: bool,
     broll: list[BrollOverlay] | None = None,
     out_fps: float | None = None,
+    caption_filter: str | None = None,
 ) -> None:
     args = ["-y", "-i", str(master)]
     overlays = list(broll or [])
@@ -358,16 +367,20 @@ def _final_pass(
         else:
             args += ["-i", str(b.asset)]
     if overlays:
-        # One filter_complex: main chain (captions/zoom/export) on [0:v] into
-        # [base0], then each B-roll segment chains on top (under nothing else —
-        # captions were already burned into the main chain).
+        # One filter_complex: main chain (ass/zoom/export) on [0:v] into
+        # [base0], then each B-roll segment chains on top, and the transcript
+        # caption drawtext chain goes LAST (above everything, never under b-roll).
         prefix = f"{vf_graph}," if vf_graph else "null"
         parts = [f"[0:v]{prefix}[base0]", *(b.segment for b in overlays)]
+        final_label = overlays[-1].out_label
+        if caption_filter:
+            parts.append(f"[{final_label}]{caption_filter}[vout]")
+            final_label = "vout"
         args += [
             "-filter_complex",
             ";".join(parts),
             "-map",
-            f"[{overlays[-1].out_label}]",
+            f"[{final_label}]",
             "-c:v",
             "libx264",
             "-preset",
@@ -377,8 +390,9 @@ def _final_pass(
             "-pix_fmt",
             "yuv420p",
         ]
-    elif vf_graph:
-        args += ["-vf", vf_graph]
+    elif vf_graph or caption_filter:
+        vf_parts = [p for p in (vf_graph, caption_filter) if p]
+        args += ["-vf", ",".join(vf_parts)]
         args += [
             "-c:v",
             "libx264",

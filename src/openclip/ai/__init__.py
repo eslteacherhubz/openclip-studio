@@ -38,9 +38,11 @@ from openclip.ai.prompts import build_director_system_prompt, build_director_use
 from openclip.ai.providers import AIProvider, create_provider
 from openclip.ai.render_primitives import (
     DEFAULT_ZOOM_STRENGTH,
+    CaptionBlock,
     ExportConfigArgs,
     audio_chain_for_enhancement,
     build_broll_filter,
+    build_caption_filter,
     build_export_config_args,
     build_export_vf,
     build_zoom_vf,
@@ -72,6 +74,7 @@ __all__ = [
     "AISpan",
     "AIZoom",
     "AnthropicClient",
+    "CaptionBlock",
     "ExportConfigArgs",
     "MockAIProvider",
     "OpenAICompatibleClient",
@@ -84,6 +87,7 @@ __all__ = [
     "ai_plan_to_director_decisions",
     "audio_chain_for_enhancement",
     "build_broll_filter",
+    "build_caption_filter",
     "build_director_system_prompt",
     "build_director_user_prompt",
     "build_export_config_args",

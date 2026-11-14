@@ -7,8 +7,10 @@ from pathlib import Path
 import pytest
 
 from openclip.ai import (
+    CaptionBlock,
     audio_chain_for_enhancement,
     build_broll_filter,
+    build_caption_filter,
     build_export_config_args,
     build_export_vf,
     build_zoom_vf,
@@ -89,19 +91,20 @@ class TestAudioChainForEnhancement:
         assert audio_chain_for_enhancement(True, None, None) is None
 
 
-class TestExecutorWiring:
-    def _project_media(self, tmp_path: Path) -> tuple[Project, MediaInfo]:
-        project = Project.create(source=tmp_path / "in.mp4", script_text="Hello :: Hola\n")
-        media = MediaInfo(
-            path=tmp_path / "in.mp4",
-            duration_s=14.0,
-            has_video=True,
-            has_audio=True,
-            width=320,
-            height=180,
-        )
-        return project, media
+def _project_media(tmp_path: Path) -> tuple[Project, MediaInfo]:
+    project = Project.create(source=tmp_path / "in.mp4", script_text="Hello :: Hola\n")
+    media = MediaInfo(
+        path=tmp_path / "in.mp4",
+        duration_s=14.0,
+        has_video=True,
+        has_audio=True,
+        width=320,
+        height=180,
+    )
+    return project, media
 
+
+class TestExecutorWiring:
     def test_zoom_and_audio_passed_to_render(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
@@ -121,7 +124,7 @@ class TestExecutorWiring:
             )
 
         monkeypatch.setattr(executor, "render_export", _fake)
-        project, media = self._project_media(tmp_path)
+        project, media = _project_media(tmp_path)
         decisions = [
             Decision(
                 id="c1", kind="cut", source_span=(2.0, 3.0), rationale="silence",
@@ -166,7 +169,7 @@ class TestExecutorWiring:
             )
 
         monkeypatch.setattr(executor, "render_export", _fake)
-        project, media = self._project_media(tmp_path)
+        project, media = _project_media(tmp_path)
         decisions = [
             Decision(
                 id="c1", kind="cut", source_span=(2.0, 6.0), rationale="silence",
@@ -198,7 +201,7 @@ class TestExecutorWiring:
         monkeypatch.setattr(executor, "render_export", _fake)
         asset = tmp_path / "b.png"
         asset.write_bytes(b"fake")  # exists() is all the executor checks
-        project, media = self._project_media(tmp_path)
+        project, media = _project_media(tmp_path)
         decisions = [
             Decision(
                 id="c1", kind="cut", source_span=(2.0, 3.0), rationale="silence",
@@ -244,7 +247,7 @@ class TestExecutorWiring:
             )
 
         monkeypatch.setattr(executor, "render_export", _fake)
-        project, media = self._project_media(tmp_path)
+        project, media = _project_media(tmp_path)
         decisions = [
             Decision(
                 id="keep1", kind="clip", source_span=(2.0, 6.0), rationale="keep this",
@@ -291,7 +294,7 @@ class TestExecutorWiring:
             )
 
         monkeypatch.setattr(executor, "render_export", _fake)
-        project, media = self._project_media(tmp_path)
+        project, media = _project_media(tmp_path)
         decisions = [
             Decision(
                 id="b1", kind="broll", source_span=(1.0, 2.0), rationale="b-roll",
@@ -379,6 +382,62 @@ class TestBuildExportConfig:
     def test_build_export_vf_directly(self) -> None:
         assert build_export_vf(None, None, False) is None
         assert build_export_vf(640, 360, False) == "scale=640:360"
+
+
+class TestBuildCaptionFilter:
+    def test_single_block_exact_string(self) -> None:
+        blocks = [CaptionBlock(text="Hello", start_s=1.0, end_s=3.0)]
+        vf = build_caption_filter(blocks, (320, 180))
+        assert vf is not None
+        fs = max(12, int(180 * 0.06))  # 12
+        margin = max(8, int(180 * 0.05))  # 9
+        assert vf == (
+            f"drawtext=font='Sans':text='Hello':fontsize={fs}:fontcolor=white"
+            f":borderw=2:bordercolor=black:x=(w-text_w)/2"
+            f":y={180 - fs - margin}:enable='between(t,1.000,3.000)'"
+        )
+
+    def test_bilingual_stacked(self) -> None:
+        blocks = [CaptionBlock(text="Hello", translation="Hola", start_s=0.0, end_s=2.0)]
+        vf = build_caption_filter(blocks, (320, 180))
+        assert vf is not None
+        assert vf.count("drawtext=") == 2
+        assert "text='Hello'" in vf and "text='Hola'" in vf
+        fs, margin = 12, 9
+        assert f":y={180 - 2 * fs - margin}" in vf  # original on top
+        assert f":y={180 - fs - margin}" in vf  # translation below
+        assert "fontcolor=white" in vf and "bordercolor=black" in vf
+
+    def test_escaping(self) -> None:
+        blocks = [CaptionBlock(text="it's 100%: a,b;c[d]", start_s=0.0, end_s=1.0)]
+        vf = build_caption_filter(blocks, (320, 180))
+        assert vf is not None
+        assert "it\\'s 100\\%\\: a\\,b\\;c\\[d\\]" in vf
+
+    def test_newlines_flattened(self) -> None:
+        block = CaptionBlock(text="line1\nline2", start_s=0.0, end_s=1.0)
+        vf = build_caption_filter([block], (320, 180))
+        assert vf is not None and "line1 line2" in vf
+
+    def test_invalid_blocks_skipped_with_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        blocks: list[dict[str, object]] = [
+            {"text": "", "start": 0.0, "end": 1.0},  # empty text
+            {"text": "ok", "start": 5.0, "end": 1.0},  # end <= start
+            {"text": "good", "start": 0.0, "end": 1.0},
+        ]
+        with caplog.at_level("WARNING"):
+            vf = build_caption_filter(blocks, (320, 180))
+        assert vf is not None and vf.count("drawtext=") == 1 and "good" in vf
+        assert len(caplog.records) == 2
+
+    def test_empty_returns_none(self) -> None:
+        assert build_caption_filter([], (320, 180)) is None
+
+    def test_deterministic_and_resolution_dependent(self) -> None:
+        blocks = [CaptionBlock(text="Hi", start_s=0.0, end_s=1.0)]
+        assert build_caption_filter(blocks, (320, 180)) == build_caption_filter(blocks, (320, 180))
+        vf_1080 = build_caption_filter(blocks, (1920, 1080))
+        assert vf_1080 is not None and "fontsize=64" in vf_1080  # 1080*0.06
 
 
 class TestRealRender:
@@ -489,6 +548,104 @@ class TestRealRender:
         assert abs(info.duration_s - 4.0) < 0.5  # only the 4–8s span survives
         assert (info.width, info.height) == (320, 180)
         assert result.cuts_applied == 2  # [0,4) and [8,14] removed
+
+    def test_executor_builds_caption_filter_from_kept_captions(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from openclip.director import executor
+        from openclip.engine.render import RenderOptions
+
+        captured: dict[str, object] = {}
+
+        def _fake(**kwargs: object) -> RenderResult:
+            captured.update(kwargs)
+            return RenderResult(
+                out=Path(str(kwargs["out_path"])), kept_duration_s=12.0, segments=1,
+                cuts_applied=1, captions_burned=True, audio_enhanced=False,
+            )
+
+        monkeypatch.setattr(executor, "render_export", _fake)
+        project, media = _project_media(tmp_path)
+        decisions = [
+            Decision(
+                id="c1", kind="cut", source_span=(2.0, 3.0), rationale="silence",
+                status="accepted",
+            ),
+            Decision(
+                id="cap1", kind="caption", source_span=(4.0, 6.0),
+                params={"primary": "Hello", "support": "Hola", "origin": "ai"},
+                rationale="Hello", status="accepted",
+            ),
+            Decision(
+                id="cap2", kind="caption", source_span=(2.0, 3.0),  # inside the cut
+                params={"primary": "Removed", "origin": "ai"},
+                rationale="Removed", status="accepted",
+            ),
+        ]
+        edl = EditDecisionList(project_source="in.mp4", decisions=decisions)
+        render_edl(
+            project, media, edl, tmp_path / "out.mp4",
+            RenderOptions(transcript_captions=True),
+        )
+        vf = str(captured["caption_filter"])
+        assert "text='Hello'" in vf and "text='Hola'" in vf
+        assert "between(t,3.000,5.000)" in vf  # 4–6s shifted by the 2–3s cut
+        assert "Removed" not in vf  # caption inside a cut is dropped
+
+    def test_caption_filter_not_built_unless_requested(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from openclip.director import executor
+
+        captured: dict[str, object] = {}
+
+        def _fake(**kwargs: object) -> RenderResult:
+            captured.update(kwargs)
+            return RenderResult(
+                out=Path(str(kwargs["out_path"])), kept_duration_s=14.0, segments=1,
+                cuts_applied=0, captions_burned=False, audio_enhanced=False,
+            )
+
+        monkeypatch.setattr(executor, "render_export", _fake)
+        project, media = _project_media(tmp_path)
+        decisions = [
+            Decision(
+                id="cap1", kind="caption", source_span=(1.0, 2.0),
+                params={"primary": "Hi", "origin": "ai"}, rationale="Hi", status="accepted",
+            )
+        ]
+        edl = EditDecisionList(project_source="in.mp4", decisions=decisions)
+        render_edl(project, media, edl, tmp_path / "out.mp4")  # default opts
+        assert captured["caption_filter"] is None
+
+    def test_transcript_captions_burned_in_real_render(self, tmp_path: Path) -> None:
+        from openclip.engine.render import RenderOptions
+
+        # solid black 10s video: burned white text is unambiguous in pixels
+        black = tmp_path / "black.mp4"
+        run_ffmpeg(
+            [
+                "-y", "-f", "lavfi", "-i", "color=c=black:size=320x180:rate=15:duration=10",
+                "-pix_fmt", "yuv420p", "-c:v", "libx264", "-crf", "20", str(black),
+            ],
+            timeout=120,
+        )
+        project = Project.create(source=black, script_text="")
+        media = probe(black)
+        decision = Decision(
+            id="cap1", kind="caption", source_span=(2.0, 6.0),
+            params={"primary": "BURNED CAPTION", "support": "Subtitulo", "origin": "ai"},
+            rationale="caption", status="accepted",
+        )
+        edl = EditDecisionList(project_source="black.mp4", decisions=[decision])
+        out_cap = tmp_path / "cap.mp4"
+        render_edl(project, media, edl, out_cap, RenderOptions(transcript_captions=True))
+
+        inside = self._frame(out_cap, 4.0, tmp_path / "c_in.png")  # caption visible
+        outside = self._frame(out_cap, 8.0, tmp_path / "c_out.png")  # black, no caption
+        assert inside != outside
+        # the inside frame has bright (white text) pixels, the outside is ~black
+        assert sum(inside) > sum(outside) * 2
 
     def test_export_config_vertical_916(self, lesson: Path, tmp_path: Path) -> None:
         project = Project.create(source=lesson, script_text="")

@@ -80,3 +80,34 @@ def test_ai_edit_auto_accept_renders_mp4(lesson: Path, tmp_path: Path) -> None:
     assert (info.width, info.height) == (320, 180)
     # mock plan keeps only the clip span 0–10s and cuts 2.0–3.0s inside it → ~9s
     assert 8.0 < info.duration_s < 10.0
+
+
+def test_ai_edit_auto_accept_with_captions_burns_text(
+    lesson: Path, tmp_path: Path
+) -> None:
+    from openclip.engine.ffmpeg import run_ffmpeg
+
+    def _frame(video: Path, t: float, out: Path) -> bytes:
+        run_ffmpeg(
+            ["-y", "-ss", f"{t:.3f}", "-i", str(video), "-frames:v", "1", str(out)],
+            timeout=120,
+        )
+        return out.read_bytes()
+
+    base_args = [
+        "ai-edit",
+        "--media", str(lesson),
+        "--prompt", "caption the greeting",
+        "--provider", "local_mock",
+        "--auto-accept",
+    ]
+    out_cap = tmp_path / "cap.mp4"
+    rc = main([*base_args, "-o", str(out_cap), "--captions"])
+    assert rc == 0
+    out_plain = tmp_path / "plain.mp4"
+    rc = main([*base_args, "-o", str(out_plain)])
+    assert rc == 0
+    # mock caption "Hello / Hola" covers source 0–2s → export 0–2s (inside clip 0–10)
+    assert _frame(out_cap, 1.0, tmp_path / "c.png") != _frame(out_plain, 1.0, tmp_path / "p.png")
+    # outside the caption span frames are identical
+    assert _frame(out_cap, 6.0, tmp_path / "c2.png") == _frame(out_plain, 6.0, tmp_path / "p2.png")

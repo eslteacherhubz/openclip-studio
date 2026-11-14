@@ -22,8 +22,10 @@ from dataclasses import replace
 from pathlib import Path
 
 from openclip.ai.render_primitives import (
+    CaptionBlock,
     audio_chain_for_enhancement,
     build_broll_filter,
+    build_caption_filter,
     build_export_config_args,
     build_zoom_vf,
 )
@@ -310,6 +312,33 @@ def render_edl(
         )
         prev_label = out_label
 
+    # Transcript captions: accepted "caption" decisions that survive the cuts
+    # (mapped to the export timeline) become inline drawtext burns, appended
+    # LAST in the filter chain (after zoom/broll/export scaling).
+    caption_filter: str | None = None
+    if opts.transcript_captions:
+        blocks: list[CaptionBlock] = []
+        for d in accepted:
+            if d.kind != "caption" or d.source_span is None:
+                continue
+            export_span = map_span(d.source_span[0], d.source_span[1], cut_spans)
+            if export_span is None:
+                continue  # caption fully inside a removed span
+            text = str(d.params.get("primary") or d.rationale or "")
+            support = d.params.get("support")
+            if not text.strip():
+                continue
+            blocks.append(
+                CaptionBlock(
+                    text=text,
+                    start_s=export_span[0],
+                    end_s=export_span[1],
+                    translation=str(support) if isinstance(support, str) else None,
+                )
+            )
+        if blocks:
+            caption_filter = build_caption_filter(blocks, target_res)
+
     audio_preset = opts.audio_preset or project.audio_preset
     audio_chain = build_audio_filter(audio_preset) if media.has_audio else None
     enhance_decisions = [d for d in accepted if d.kind == "audio_enhance"]
@@ -342,6 +371,7 @@ def render_edl(
         video_filters=video_filters or None,
         broll=broll_overlays or None,
         out_fps=out_fps,
+        caption_filter=caption_filter,
     )
 
 
