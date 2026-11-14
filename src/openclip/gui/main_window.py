@@ -36,6 +36,10 @@ from openclip.engine.ffmpeg import MediaInfo, probe
 from openclip.engine.pipeline import available_transcribers
 from openclip.engine.project import Project
 from openclip.gui.workers import (
+    AIPlanRequest,
+    AIPlanWorker,
+    AIRenderRequest,
+    AIRenderWorker,
     AnalysisRequest,
     AnalysisWorker,
     RenderRequest,
@@ -67,6 +71,9 @@ class MainWindow(QMainWindow):
         self._project_path: Path | None = None
         self._analysis_runner = ThreadedRunner()
         self._render_runner = ThreadedRunner()
+        self._ai_plan_runner = ThreadedRunner()
+        self._ai_render_runner = ThreadedRunner()
+        self._ai_plan: object | None = None  # AIDirectorPlan
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -79,8 +86,9 @@ class MainWindow(QMainWindow):
 
         splitter.addWidget(self._build_script_panel())
         splitter.addWidget(self._build_review_panel())
+        splitter.addWidget(self._build_ai_panel())
         splitter.addWidget(self._build_settings_panel())
-        splitter.setSizes([380, 420, 260])
+        splitter.setSizes([340, 360, 300, 260])
 
         root.addWidget(self._build_player_bar())
         self.setStatusBar(QStatusBar())
@@ -137,6 +145,38 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.cut_table)
         note = QLabel("Uncheck a row to KEEP that span; checked rows are removed.")
         layout.addWidget(note)
+        return box
+
+    def _build_ai_panel(self) -> QWidget:
+        box = QGroupBox("AI Director proposals (review before render)")
+        layout = QVBoxLayout(box)
+        self.edit_ai_prompt = QLineEdit()
+        self.edit_ai_prompt.setPlaceholderText(
+            "Natural-language request, e.g. 'Make a short clip about the main topic'"
+        )
+        layout.addWidget(self.edit_ai_prompt)
+        btn_row = QHBoxLayout()
+        self.btn_ai_plan = QPushButton("AI Plan…")
+        self.btn_ai_render = QPushButton("Accept && Render AI…")
+        btn_row.addWidget(self.btn_ai_plan)
+        btn_row.addWidget(self.btn_ai_render)
+        layout.addLayout(btn_row)
+        self.ai_table = QTableWidget(0, 5)
+        self.ai_table.setHorizontalHeaderLabels(
+            ["Accept?", "Kind", "Start (s)", "End (s)", "Reason"]
+        )
+        self.ai_table.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(self.ai_table)
+        note = QLabel(
+            "Checked rows are accepted and rendered; unchecked rows are rejected. "
+            "Provider defaults to local_mock (offline); real providers use BYOK env keys."
+        )
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        self.btn_ai_plan.clicked.connect(self.ai_plan)
+        self.btn_ai_render.clicked.connect(self.ai_render)
+        self.btn_ai_plan.setEnabled(False)
+        self.btn_ai_render.setEnabled(False)
         return box
 
     def _build_settings_panel(self) -> QWidget:
@@ -265,7 +305,7 @@ class MainWindow(QMainWindow):
         )
         self.player.setSource(QUrl.fromLocalFile(str(self.project.source)))
         self.slider.setRange(0, int(self.media.duration_s * 1000))
-        for btn in (self.btn_save, self.btn_analyze, self.btn_export):
+        for btn in (self.btn_save, self.btn_analyze, self.btn_export, self.btn_ai_plan):
             btn.setEnabled(True)
 
     # ---------- analysis / review / export ----------
@@ -432,6 +472,136 @@ class MainWindow(QMainWindow):
         if hasattr(self, "progress"):
             self.statusBar().removeWidget(self.progress)
             self.progress = None  # type: ignore[assignment]
+
+    # ---------- AI Director: plan → review → render ----------
+
+    def ai_plan(self) -> None:
+        """Run the AI pipeline for the current media + prompt (background thread)."""
+        if self.media is None or self._ai_plan_runner.busy:
+            return
+        prompt = self.edit_ai_prompt.text().strip()
+        if not prompt:
+            QMessageBox.information(self, "AI Director", "Enter an editing prompt first.")
+            return
+        self.btn_ai_plan.setEnabled(False)
+        self.statusBar().showMessage("AI planning (local_mock, offline)…")
+        worker = AIPlanWorker(
+            AIPlanRequest(
+                media_path=self.media.path,
+                prompt=prompt,
+                transcript=self.script_edit.toPlainText(),
+                provider="local_mock",
+            )
+        )
+        worker.finished.connect(self._on_ai_plan_done)
+        worker.failed.connect(self._on_ai_plan_failed)
+        self._ai_plan_runner.start(worker)
+
+    def _on_ai_plan_done(self, plan: object) -> None:
+        from openclip.ai import AIDirectorPlan
+
+        assert isinstance(plan, AIDirectorPlan)
+        self._ai_plan = plan
+        self._refresh_ai_table()
+        self.btn_ai_plan.setEnabled(True)
+        self.btn_ai_render.setEnabled(True)
+        self.statusBar().showMessage(
+            f"AI plan ready: {len(plan.clips)} clips, {len(plan.cuts)} cuts, "
+            f"{len(plan.zooms)} zooms, {len(plan.broll)} b-roll — review below."
+        )
+
+    def _on_ai_plan_failed(self, message: str) -> None:
+        self.btn_ai_plan.setEnabled(True)
+        QMessageBox.critical(self, "AI Director", f"AI planning failed:\n{message}")
+
+    def _refresh_ai_table(self) -> None:
+        from openclip.ai import plan_to_review_items
+
+        self.ai_table.setRowCount(0)
+        if self._ai_plan is None:
+            return
+        for row, item in enumerate(plan_to_review_items(self._ai_plan)):  # type: ignore[arg-type]
+            self.ai_table.insertRow(row)
+            box = QTableWidgetItem()
+            box.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+            box.setCheckState(Qt.CheckState.Checked)  # PENDING → proposed accept
+            self.ai_table.setItem(row, 0, box)
+            start = f"{item.start_seconds:.2f}"
+            end = f"{item.end_seconds:.2f}"
+            for col, text in enumerate((item.kind, start, end, item.reason), start=1):
+                cell = QTableWidgetItem(text)
+                cell.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                self.ai_table.setItem(row, col, cell)
+
+    def _ai_acceptance(self) -> list[bool]:
+        return [
+            (self.ai_table.item(row, 0) is not None)
+            and self.ai_table.item(row, 0).checkState() == Qt.CheckState.Checked
+            for row in range(self.ai_table.rowCount())
+        ]
+
+    def ai_render(self) -> None:
+        """Render only the accepted AI review items through the director EDL."""
+        if self.media is None or self._ai_plan is None or self._ai_render_runner.busy:
+            return
+        if self.ai_table.rowCount() == 0:
+            QMessageBox.information(self, "AI Director", "Run AI Plan… first.")
+            return
+        out, _ = QFileDialog.getSaveFileName(
+            self, "Export AI-edited MP4", "lesson-ai.mp4", "MP4 (*.mp4)"
+        )
+        if not out:
+            return
+        from openclip.ai import ai_plan_to_director_decisions, plan_to_review_items
+        from openclip.director.models import EditDecisionList
+
+        plan = self._ai_plan
+        items = plan_to_review_items(plan)  # type: ignore[arg-type]
+        accepted_ids = {
+            item.id for item, ok in zip(items, self._ai_acceptance(), strict=True) if ok
+        }
+        decisions = ai_plan_to_director_decisions(plan)  # type: ignore[arg-type]
+        for decision in decisions:
+            decision.status = "accepted" if decision.id in accepted_ids else "rejected"
+        project = self.project or Project.create(source=self.media.path, script_text="")
+        edl = EditDecisionList(project_source=str(self.media.path), decisions=decisions)
+        self.btn_ai_render.setEnabled(False)
+        self.statusBar().showMessage("Rendering AI plan…")
+        try:
+            crf = int(self.edit_crf.text())
+        except ValueError:
+            crf = 20
+        worker = AIRenderWorker(
+            AIRenderRequest(
+                project=project,
+                media=self.media,
+                edl=edl,
+                out_path=Path(out),
+                burn_captions=self.chk_captions.isChecked(),
+                crf=crf,
+            )
+        )
+        worker.progress.connect(self._on_render_progress)
+        worker.finished.connect(lambda res: self._on_ai_render_done(out, res))
+        worker.failed.connect(self._on_ai_render_failed)
+        self._ai_render_runner.start(worker)
+
+    def _on_ai_render_done(self, out_path: str, result: object) -> None:
+        self._finish_progress()
+        self.btn_ai_render.setEnabled(True)
+        QMessageBox.information(
+            self,
+            "AI export complete",
+            f"Exported to:\n{out_path}\n\n"
+            f"Kept {getattr(result, 'kept_duration_s', 0):.1f}s, "
+            f"{getattr(result, 'cuts_applied', 0)} cuts applied.",
+        )
+        self.statusBar().showMessage(f"Exported {out_path}", 10000)
+
+    def _on_ai_render_failed(self, message: str) -> None:
+        self._finish_progress()
+        self.btn_ai_render.setEnabled(True)
+        QMessageBox.critical(self, "AI Director", f"AI render failed:\n{message}")
 
     # ---------- playback ----------
 

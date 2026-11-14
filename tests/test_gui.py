@@ -98,6 +98,50 @@ def test_analysis_populates_cut_table(window) -> None:
     assert window.project.cut_plan.cuts[0].accepted is False
 
 
+def test_ai_review_table_populates_and_toggles(window) -> None:
+    import json
+
+    from PySide6.QtCore import Qt
+
+    from openclip.ai import (
+        MockAIProvider,
+        generate_plan,
+        load_provider_config,
+        plan_to_review_items,
+    )
+
+    provider = MockAIProvider(load_provider_config("local_mock", env={}))
+    plan = generate_plan(provider, "short clip", "transcript", 14.0)
+    window._ai_plan = plan
+    window._refresh_ai_table()
+
+    items = plan_to_review_items(plan)
+    assert window.ai_table.rowCount() == len(items)
+    kinds = {window.ai_table.item(r, 1).text() for r in range(window.ai_table.rowCount())}
+    assert {"clip", "cut", "caption", "zoom", "broll"} <= kinds
+    # every proposal starts PENDING → checkbox checked (proposed accept)
+    assert all(
+        window.ai_table.item(r, 0).checkState() == Qt.CheckState.Checked
+        for r in range(window.ai_table.rowCount())
+    )
+    assert all(window._ai_acceptance())
+
+    # reject the first row; acceptance list must reflect the toggle
+    window.ai_table.item(0, 0).setCheckState(Qt.CheckState.Unchecked)
+    acceptance = window._ai_acceptance()
+    assert acceptance[0] is False
+    assert all(acceptance[1:])
+
+    # decisions built from the plan stay pending until the user renders
+    from openclip.ai import ai_plan_to_director_decisions
+
+    decisions = ai_plan_to_director_decisions(plan)
+    assert all(d.status == "pending" for d in decisions)
+    assert len(decisions) == len(json.loads(json.dumps(plan.to_dict()))["clips"]) + sum(
+        len(plan.to_dict()[k]) for k in ("cuts", "captions", "broll", "zooms")
+    ) + 2  # audio + export
+
+
 def test_gui_entry_declines_without_media() -> None:
     if not _qt_available():
         pytest.skip("PySide6 (gui extra) not installed")
