@@ -7,16 +7,27 @@ the source frame (no black bars). No keyframes, no temp files.
 
 Tracking data is normalized (0..1 across width / down height). Today the data
 comes from :func:`mock_tracking_data`; later a real MediaPipe/YOLO tracker can
-feed the same :class:`TrackingPoint` list.
+feed the same :class:`TrackingPoint` list. :func:`tracking_from_face_analysis`
+is that real-tracker path: it samples a face-analysis provider (via
+:mod:`openclip.ai.face_analysis`) into the same :class:`TrackingPoint` list.
 """
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from openclip.ai.face_analysis import (
+    CachedFaceAnalysis,
+    FaceAnalysisProvider,
+    default_provider,
+)
+
 #: Default vertical (portrait) target aspect ratio, width / height.
 DEFAULT_TARGET_ASPECT: float = 9 / 16
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -50,6 +61,62 @@ def mock_tracking_data(duration_s: float = 10.0, steps: int = 4) -> list[Trackin
         )
         for i in range(steps + 1)
     ]
+
+
+def tracking_from_face_analysis(
+    provider: FaceAnalysisProvider,
+    fps: float,
+    duration: float,
+    sample_fps: float = 5.0,
+) -> list[TrackingPoint]:
+    """Sample a face-analysis provider into :class:`TrackingPoint`s.
+
+    Frames ``0 .. int(duration * fps)`` are analyzed through
+    :class:`CachedFaceAnalysis` — each frame is analyzed at most once and its
+    coordinate streams are EWMA-smoothed upstream — at a stride of
+    ``fps / sample_fps``. Each resulting :class:`FaceFrame` center becomes one
+    :class:`TrackingPoint`; frames with no detection (``None``) are dropped.
+    """
+    if fps <= 0:
+        raise ValueError(f"fps must be > 0, got {fps}")
+    if duration <= 0:
+        raise ValueError(f"duration must be > 0, got {duration}")
+    if sample_fps <= 0:
+        raise ValueError(f"sample_fps must be > 0, got {sample_fps}")
+    cached = CachedFaceAnalysis(provider)
+    step = max(1, round(fps / sample_fps))
+    total_frames = max(1, int(duration * fps))
+    points: list[TrackingPoint] = []
+    for frame_index in range(0, total_frames, step):
+        frame = cached.analyze_frame(frame_index, frame_index / fps)
+        if frame is None:
+            continue
+        points.append(
+            TrackingPoint(
+                t=frame.timestamp,
+                x_center_norm=frame.center_x,
+                y_center_norm=frame.center_y,
+            )
+        )
+    if not points:
+        logger.warning(
+            "Face analysis yielded no tracking points — falling back to static center anchor"
+        )
+        return [TrackingPoint(t=0.0, x_center_norm=0.5, y_center_norm=0.5)]
+    return points
+
+
+def tracking_from_default_face_analysis(
+    fps: float,
+    duration: float,
+    sample_fps: float = 5.0,
+) -> list[TrackingPoint]:
+    """Tracking points from :func:`openclip.ai.face_analysis.default_provider`.
+
+    Convenience path for callers that want the default (currently mock,
+    deterministic, offline) face-analysis provider.
+    """
+    return tracking_from_face_analysis(default_provider(), fps, duration, sample_fps)
 
 
 def _even(v: int) -> int:

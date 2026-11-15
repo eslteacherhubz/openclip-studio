@@ -31,11 +31,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from openclip.ai.reframing import DEFAULT_TARGET_ASPECT, tracking_from_default_face_analysis
 from openclip.engine.captions import ANIMATIONS
 from openclip.engine.enhance import PRESET_NAMES
 from openclip.engine.ffmpeg import MediaInfo, probe
 from openclip.engine.pipeline import available_transcribers
 from openclip.engine.project import Project
+from openclip.gui.reframe_preview import ReframePreviewWidget
 from openclip.gui.workers import (
     AIPlanRequest,
     AIPlanWorker,
@@ -239,6 +241,9 @@ class MainWindow(QMainWindow):
             "(mock tracking data for now)"
         )
         layout.addWidget(self.chk_auto_reframe)
+        self.reframe_preview = ReframePreviewWidget()
+        layout.addWidget(self.reframe_preview)
+        self.chk_auto_reframe.toggled.connect(self._refresh_reframe_preview)
         note = QLabel(
             "Checked rows are accepted and rendered; unchecked rows are rejected. "
             "Provider defaults to local_mock (offline); pick a real provider and "
@@ -251,6 +256,20 @@ class MainWindow(QMainWindow):
         self.btn_ai_plan.setEnabled(False)
         self.btn_ai_render.setEnabled(False)
         return box
+
+    def _refresh_reframe_preview(self, checked: bool) -> None:
+        if not checked or self.media is None:
+            self.reframe_preview.clear()
+            return
+        fps = self.media.fps if self.media.fps > 0 else 30.0
+        points = tracking_from_default_face_analysis(fps=fps, duration=self.media.duration_s)
+        self.reframe_preview.set_tracking(
+            points,
+            duration=self.media.duration_s,
+            src_width=self.media.width,
+            src_height=self.media.height,
+            target_aspect_ratio=DEFAULT_TARGET_ASPECT,
+        )
 
     def _build_settings_panel(self) -> QWidget:
         box = QGroupBox("Export settings")

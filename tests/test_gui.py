@@ -233,3 +233,67 @@ def test_gui_entry_declines_without_media() -> None:
     assert win.project is None and win.media is None
     assert not win.btn_export.isEnabled()
     win.close()
+
+
+def test_reframe_preview_placeholder_paints_without_points(qapp) -> None:
+    if not _qt_available():
+        pytest.skip("PySide6 (gui extra) not installed")
+    from openclip.gui.reframe_preview import ReframePreviewWidget
+
+    w = ReframePreviewWidget()
+    w.resize(400, 100)
+    assert w.points == []
+    pix = w.grab()
+    assert not pix.isNull()
+    w.close()
+
+
+def test_reframe_preview_paints_tracking_points(qapp) -> None:
+    if not _qt_available():
+        pytest.skip("PySide6 (gui extra) not installed")
+    from openclip.ai.reframing import mock_tracking_data
+    from openclip.gui.reframe_preview import ReframePreviewWidget
+
+    w = ReframePreviewWidget()
+    w.resize(400, 100)
+    pts = mock_tracking_data(duration_s=10.0, steps=4)
+    w.set_tracking(pts, duration=10.0, src_width=1920, src_height=1080)
+    assert w.points == pts
+    pix = w.grab()
+    assert not pix.isNull()
+    w.clear()
+    assert w.points == []
+    w.close()
+
+
+def test_auto_reframe_checkbox_populates_preview(window, monkeypatch) -> None:
+    from openclip.engine.ffmpeg import MediaInfo
+
+    fake = MediaInfo(
+        path=Path("lesson.mp4"),
+        duration_s=10.0,
+        has_video=True,
+        width=1920,
+        height=1080,
+        fps=30.0,
+    )
+    monkeypatch.setattr(window, "media", fake)
+    window.chk_auto_reframe.setChecked(True)
+    points = window.reframe_preview.points
+    assert len(points) > 0
+    times = [p.t for p in points]
+    assert times == sorted(times)
+    window.chk_auto_reframe.setChecked(False)
+    assert window.reframe_preview.points == []
+
+
+def test_reframe_preview_stays_empty_without_media(qapp) -> None:
+    if not _qt_available():
+        pytest.skip("PySide6 (gui extra) not installed")
+    from openclip.gui.main_window import MainWindow
+
+    win = MainWindow()
+    assert win.media is None
+    win.chk_auto_reframe.setChecked(True)
+    assert win.reframe_preview.points == []
+    win.close()

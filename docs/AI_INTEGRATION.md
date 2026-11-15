@@ -278,3 +278,31 @@ The edited transcript is the review: generated cuts are auto-accepted and
 rendered. `--dry-run` prints the EDL JSON without rendering. If the edit
 would delete every timestamped block (nothing left to render), the command
 exits with code 2 and a clear message instead of crashing.
+
+## Face tracking for smart reframing (Phase 9, optional dependency)
+
+`src/openclip/ai/face_analysis.py` mirrors the faster-whisper optional-dependency
+pattern: the real backend (`mediapipe` + `cv2`) is imported inside a guarded
+`try/except ImportError` at module load. Nothing is pip-installed, downloaded,
+or fetched over the network at any point.
+
+- `real_tracking_available()` reports whether the real backend is importable
+  without importing it (safe for a GUI status line).
+- `select_provider(prefer_real=False)` is the entry point. The default is the
+  deterministic offline `MockFaceAnalysisProvider`; `prefer_real=True` uses the
+  real `MediaPipeFaceAnalysisProvider` only when available, and otherwise logs
+  a warning ("Real face tracking unavailable — using offline fallback") and
+  returns the mock. It never raises `ImportError` to callers.
+
+Graceful-degradation chain for reframing tracking data:
+
+1. real MediaPipe provider (optional extra), else
+2. offline mock provider (logged warning), else
+3. a static center anchor `[(t=0, x=0.5, y=0.5)]` returned by
+   `tracking_from_face_analysis` when no face is detected at all (logged
+   warning) — reframing degrades to a stable center crop instead of failing.
+
+Packaging note (Windows): if the real backend is enabled later, MediaPipe and
+its model assets must be bundled into the installer exactly like the whisper
+(`asr`) and gaze (`gaze`) extras. CI stays fully offline and exercises the
+mock provider and center-anchor fallback.
