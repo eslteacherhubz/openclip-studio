@@ -707,11 +707,14 @@ class MainWindow(QMainWindow):
                 self.ai_table.setItem(row, col, cell)
 
     def _ai_acceptance(self) -> list[bool]:
-        return [
-            (self.ai_table.item(row, 0) is not None)
-            and self.ai_table.item(row, 0).checkState() == Qt.CheckState.Checked
-            for row in range(self.ai_table.rowCount())
-        ]
+        result = []
+        for row in range(self.ai_table.rowCount()):
+            item = self.ai_table.item(row, 0)
+            if item is not None and item.checkState() == Qt.CheckState.Checked:
+                result.append(True)
+            else:
+                result.append(False)
+        return result
 
     def ai_render(self) -> None:
         """Render only the accepted AI review items through the director EDL."""
