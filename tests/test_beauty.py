@@ -8,6 +8,10 @@ unavailable (importorskip) — NEVER skip on the beauty module itself.
 
 from __future__ import annotations
 
+import json
+import subprocess
+from pathlib import Path
+
 import pytest
 
 from openclip.ai.beauty import (
@@ -15,11 +19,17 @@ from openclip.ai.beauty import (
     _apply_exclusions,
     _rasterize_mask,
     beauty_available,
+    beauty_prepass,
     micro_sculpt,
     smooth_skin,
     spot_heal,
 )
-from openclip.ai.face_analysis import FaceFrame, Rect
+from openclip.ai.face_analysis import (
+    CachedFaceAnalysis,
+    FaceFrame,
+    MockFaceAnalysisProvider,
+    Rect,
+)
 
 # Mark as gaze tests (requires numpy/opencv from gaze extra)
 pytestmark = pytest.mark.gaze
@@ -492,3 +502,82 @@ class TestSpotHeal:
         """If vision libs unavailable, spot_heal raises RuntimeError."""
         # Cannot test with importorskip; documented for completeness
         pass
+
+
+class TestBeautyPrepassAudio:
+    """Real end-to-end: beauty_prepass preserves source audio via FFmpeg mux."""
+
+    @staticmethod
+    def _ffmpeg_available() -> bool:
+        from shutil import which
+
+        return bool(which("ffmpeg")) and bool(which("ffprobe"))
+
+    def _make_clip_with_audio(
+        self,
+        path: Path,
+        duration_s: float = 3.0,
+        fps: int = 25,
+        width: int = 320,
+        height: int = 240,
+    ) -> None:
+        args = [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i",
+            f"testsrc=duration={duration_s}:size={width}x{height}:rate={fps}",
+            "-f", "lavfi", "-i", f"sine=frequency=440:duration={duration_s}",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "128k",
+            "-shortest",
+            str(path),
+        ]
+        res = subprocess.run(args, capture_output=True, text=True, shell=False)
+        err = res.stderr.strip() or res.stdout.strip()
+        assert res.returncode == 0, f"ffmpeg clip generation failed: {err}"
+        assert path.exists() and path.stat().st_size > 0
+
+    def _ffprobe(self, path: Path) -> dict:
+        args = [
+            "ffprobe", "-v", "error", "-print_format", "json",
+            "-show_streams", "-show_format",
+            str(path),
+        ]
+        res = subprocess.run(args, capture_output=True, text=True, shell=False)
+        assert res.returncode == 0, f"ffprobe failed: {res.stderr.strip() or res.stdout.strip()}"
+        return json.loads(res.stdout)
+
+    def test_prepass_preserves_audio_stream(self, tmp_path: Path) -> None:
+        if not self._ffmpeg_available():
+            pytest.skip("ffmpeg/ffprobe not available")
+
+        source = tmp_path / "source_with_audio.mp4"
+        out = tmp_path / "out_with_audio.mp4"
+        self._make_clip_with_audio(source, duration_s=3.0, fps=25, width=320, height=240)
+
+        beauty_prepass(
+            str(source),
+            str(out),
+            BeautyConfig(),
+            CachedFaceAnalysis(MockFaceAnalysisProvider()),
+            fps=25.0,
+            width=320,
+            height=240,
+        )
+
+        assert out.exists() and out.stat().st_size > 0
+        info = self._ffprobe(out)
+
+        streams = info.get("streams", [])
+        video_streams = [s for s in streams if s.get("codec_type") == "video"]
+        audio_streams = [s for s in streams if s.get("codec_type") == "audio"]
+
+        assert len(video_streams) == 1, f"expected 1 video stream, got {video_streams}"
+        assert len(audio_streams) == 1, f"expected 1 audio stream, got {audio_streams}"
+
+        vs = video_streams[0]
+        assert int(vs.get("width", 0)) == 320, f"unexpected width: {vs}"
+        assert int(vs.get("height", 0)) == 240, f"unexpected height: {vs}"
+
+        fmt = info.get("format", {})
+        duration = float(fmt.get("duration", 0.0))
+        assert abs(duration - 3.0) < 0.5, f"unexpected duration: {duration}s"

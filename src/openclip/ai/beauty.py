@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
+import os
+import subprocess
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -389,11 +392,18 @@ def beauty_prepass(
         raise RuntimeError(f"Cannot open source video: {source_path}")
 
     # H.264 (avc1) fourcc: cv2.VideoWriter_fourcc("avc1") packed as a little-endian int.
+    # Fall back to mp4v when avc1 is unsupported by the cv2 build.
     fourcc = ord("a") | (ord("v") << 8) | (ord("c") << 16) | (ord("1") << 24)
-    writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+    video_tmp = output_path + ".videoonly.mp4"
+    writer = cv2.VideoWriter(video_tmp, fourcc, fps, (width, height))
     if not writer.isOpened():
-        cap.release()
-        raise RuntimeError(f"Cannot open video writer for: {output_path}")
+        writer.release()
+        fourcc = ord("m") | (ord("p") << 8) | (ord("4") << 16) | (ord("v") << 24)
+        writer = cv2.VideoWriter(video_tmp, fourcc, fps, (width, height))
+        if not writer.isOpened():
+            cap.release()
+            writer.release()
+            raise RuntimeError("Cannot open video writer for: " + video_tmp)
 
     try:
         frame_index = 0
@@ -419,3 +429,24 @@ def beauty_prepass(
     finally:
         cap.release()
         writer.release()
+
+    # Mux the original audio back into the beautified video (the cv2 writer is
+    # video-only; we remux so the intermediate master keeps source audio).
+    ffmpeg_args = [
+        "ffmpeg", "-y",
+        "-i", video_tmp,
+        "-i", source_path,
+        "-map", "0:v:0",
+        "-map", "1:a:0?",
+        "-c:v", "copy",
+        "-c:a", "copy",
+        output_path,
+    ]
+    result = subprocess.run(ffmpeg_args, capture_output=True, text=True, shell=False)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"ffmpeg audio mux failed (rc={result.returncode}): "
+            f"{result.stderr.strip() or result.stdout.strip()}"
+        )
+    with contextlib.suppress(OSError):
+        os.remove(video_tmp)
