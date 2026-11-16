@@ -442,11 +442,13 @@ def beauty_prepass(
         "-c:a", "copy",
         output_path,
     ]
-    result = subprocess.run(ffmpeg_args, capture_output=True, text=True, shell=False)
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"ffmpeg audio mux failed (rc={result.returncode}): "
-            f"{result.stderr.strip() or result.stdout.strip()}"
-        )
-    with contextlib.suppress(OSError):
-        os.remove(video_tmp)
+    try:
+        result = subprocess.run(ffmpeg_args, capture_output=True, text=True, shell=False)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"ffmpeg audio mux failed (rc={result.returncode}): "
+                f"{result.stderr.strip() or result.stdout.strip()}"
+            )
+    finally:
+        with contextlib.suppress(OSError):
+            os.remove(video_tmp)
