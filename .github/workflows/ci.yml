@@ -16,7 +16,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: python -m pip install --upgrade pip
-      - run: pip install ruff
+      - run: pip install ruff==0.16.10
       - run: ruff check src tests
 
   mypy:
@@ -29,6 +29,7 @@ jobs:
       - name: Install package + mypy (extras provide stubs for gui/gaze)
         run: |
           python -m pip install --upgrade pip
+          pip install mypy==2.4.0
           pip install -e ".[dev,gui,gaze]"
       - name: Enforce mypy --strict on src/ (Stage 4 gate)
         run: mypy
@@ -49,8 +50,8 @@ jobs:
           pip install -e ".[dev]"
       - name: Show ffmpeg
         run: ffmpeg -version | head -1
-      - name: Run tests (ASR integration auto-skips in CI)
-        run: pytest -v
+      - name: Run tests (exclude gui/gaze which need extra deps)
+        run: pytest -v -m "not (gui or gaze)"
 
   gui:
     runs-on: ubuntu-latest

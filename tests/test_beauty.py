@@ -13,6 +13,9 @@ import pytest
 from openclip.ai.beauty import _apply_exclusions, _rasterize_mask, beauty_available, smooth_skin
 from openclip.ai.face_analysis import FaceFrame, Rect
 
+# Mark as gaze tests (requires numpy/opencv from gaze extra)
+pytestmark = pytest.mark.gaze
+
 # Skip tests if optional vision dependencies are unavailable
 cv2 = pytest.importorskip("cv2")
 np = pytest.importorskip("numpy")
