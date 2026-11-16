@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from openclip.ai.reframing import TrackingPoint
 from pathlib import Path
 
+from openclip.ai.beauty import BeautyConfig
 from openclip.engine.align import Alignment, LineAlignment
 from openclip.engine.captions import build_ass
 from openclip.engine.cutplan import kept_intervals
@@ -50,6 +51,7 @@ class RenderOptions:
     caption_style: str | None = None  # STYLE_TEMPLATES name (None → Classic)
     smart_reframe: bool = False  # subject-tracking crop before the export scale
     tracking_data: Sequence[TrackingPoint] | None = None  # None → mock pan
+    beauty: BeautyConfig | None = None  # beauty/retouching pre-pass config (None → off)
 
 
 @dataclass

@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from openclip.ai.beauty import BeautyConfig, beauty_available
 from openclip.ai.reframing import DEFAULT_TARGET_ASPECT, tracking_from_default_face_analysis
 from openclip.engine.captions import ANIMATIONS
 from openclip.engine.enhance import PRESET_NAMES
@@ -244,6 +245,47 @@ class MainWindow(QMainWindow):
         self.reframe_preview = ReframePreviewWidget()
         layout.addWidget(self.reframe_preview)
         self.chk_auto_reframe.toggled.connect(self._refresh_reframe_preview)
+
+        self.chk_beauty = QCheckBox("Beauty & Retouching")
+        self.chk_beauty.setChecked(False)
+        if not beauty_available():
+            self.chk_beauty.setEnabled(False)
+            self.chk_beauty.setToolTip("Requires numpy + opencv (vision extra)")
+        else:
+            self.chk_beauty.setToolTip(
+                "Apply skin smoothing, jaw/neck sculpting, and blemish healing "
+                "as a pre-pass before export"
+            )
+        layout.addWidget(self.chk_beauty)
+
+        skin_row = QHBoxLayout()
+        skin_row.addWidget(QLabel("Skin Smoothness:"))
+        self.slider_beauty_skin = QSlider(Qt.Orientation.Horizontal)
+        self.slider_beauty_skin.setRange(0, 100)
+        self.slider_beauty_skin.setValue(15)
+        self.slider_beauty_skin.setEnabled(False)
+        skin_row.addWidget(self.slider_beauty_skin, 1)
+        layout.addLayout(skin_row)
+
+        jaw_row = QHBoxLayout()
+        jaw_row.addWidget(QLabel("Jaw Slim:"))
+        self.slider_beauty_jaw = QSlider(Qt.Orientation.Horizontal)
+        self.slider_beauty_jaw.setRange(0, 100)
+        self.slider_beauty_jaw.setValue(10)
+        self.slider_beauty_jaw.setEnabled(False)
+        jaw_row.addWidget(self.slider_beauty_jaw, 1)
+        layout.addLayout(jaw_row)
+
+        neck_row = QHBoxLayout()
+        neck_row.addWidget(QLabel("Neck Tighten:"))
+        self.slider_beauty_neck = QSlider(Qt.Orientation.Horizontal)
+        self.slider_beauty_neck.setRange(0, 100)
+        self.slider_beauty_neck.setValue(10)
+        self.slider_beauty_neck.setEnabled(False)
+        neck_row.addWidget(self.slider_beauty_neck, 1)
+        layout.addLayout(neck_row)
+
+        self.chk_beauty.toggled.connect(self._on_beauty_toggled)
         note = QLabel(
             "Checked rows are accepted and rendered; unchecked rows are rejected. "
             "Provider defaults to local_mock (offline); pick a real provider and "
@@ -270,6 +312,12 @@ class MainWindow(QMainWindow):
             src_height=self.media.height,
             target_aspect_ratio=DEFAULT_TARGET_ASPECT,
         )
+
+    def _on_beauty_toggled(self, checked: bool) -> None:
+        enabled = checked and beauty_available()
+        self.slider_beauty_skin.setEnabled(enabled)
+        self.slider_beauty_jaw.setEnabled(enabled)
+        self.slider_beauty_neck.setEnabled(enabled)
 
     def _build_settings_panel(self) -> QWidget:
         box = QGroupBox("Export settings")
@@ -747,6 +795,13 @@ class MainWindow(QMainWindow):
             crf = int(self.edit_crf.text())
         except ValueError:
             crf = 20
+        beauty = None
+        if self.chk_beauty.isChecked():
+            beauty = BeautyConfig(
+                skin_smooth=self.slider_beauty_skin.value() / 100.0,
+                jaw_slim=self.slider_beauty_jaw.value() / 100.0,
+                neck_tighten=self.slider_beauty_neck.value() / 100.0,
+            )
         worker = AIRenderWorker(
             AIRenderRequest(
                 project=project,
@@ -758,6 +813,7 @@ class MainWindow(QMainWindow):
                 transcript_captions=self.chk_ai_captions.isChecked(),
                 caption_style=self.cmb_caption_style.currentText() or None,
                 smart_reframe=self.chk_auto_reframe.isChecked(),
+                beauty=beauty,
             )
         )
         worker.progress.connect(self._on_render_progress)

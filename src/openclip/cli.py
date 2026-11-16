@@ -216,6 +216,15 @@ def _cmd_ai_edit(args: argparse.Namespace) -> int:
         decision.status = "accepted"
     edl = EditDecisionList(project_source=str(media.path), decisions=decisions)
     project = Project.create(source=media.path, script_text="")
+    beauty = None
+    if args.beauty:
+        from openclip.ai.beauty import BeautyConfig
+
+        beauty = BeautyConfig(
+            skin_smooth=args.beauty_smooth,
+            jaw_slim=args.beauty_jaw,
+            neck_tighten=args.beauty_neck,
+        )
     result = render_edl(
         project,
         media,
@@ -226,6 +235,7 @@ def _cmd_ai_edit(args: argparse.Namespace) -> int:
             transcript_captions=args.captions,
             caption_style=args.caption_style,
             smart_reframe=args.auto_reframe,
+            beauty=beauty,
         ),
     )
     print(
@@ -440,6 +450,29 @@ def build_parser() -> argparse.ArgumentParser:
         "--auto-reframe",
         action="store_true",
         help="with --auto-accept: smart 9:16 subject-tracking crop (mock tracking data)",
+    )
+    sp.add_argument(
+        "--beauty",
+        action="store_true",
+        help="with --auto-accept: apply the beauty/retouching pre-pass to the source",
+    )
+    sp.add_argument(
+        "--beauty-smooth",
+        type=float,
+        default=0.15,
+        help="skin smoothness intensity [0,1] (default: %(default)s)",
+    )
+    sp.add_argument(
+        "--beauty-jaw",
+        type=float,
+        default=0.10,
+        help="jaw slim intensity [0,1] (default: %(default)s)",
+    )
+    sp.add_argument(
+        "--beauty-neck",
+        type=float,
+        default=0.10,
+        help="neck tighten intensity [0,1] (default: %(default)s)",
     )
     sp.set_defaults(func=_cmd_ai_edit)
 

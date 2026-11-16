@@ -6,13 +6,14 @@ from pathlib import Path
 
 import pytest
 
+from openclip.ai.beauty import BeautyConfig
 from openclip.director.executor import compose_ass, render_edl
 from openclip.director.models import Decision, EditDecisionList, check_invariants, summarize
 from openclip.director.planner import plan_from_project
-from openclip.engine.ffmpeg import probe
+from openclip.engine.ffmpeg import MediaInfo, probe
 from openclip.engine.pipeline import run_pipeline, spans_to_hyps
 from openclip.engine.project import Project
-from openclip.engine.render import RenderOptions
+from openclip.engine.render import RenderOptions, RenderResult
 from openclip.engine.synth import (
     SynthLesson,
     generate_lesson,
@@ -367,3 +368,133 @@ class TestExecutor:
         text = compose_ass(project, media, [], edl)
         assert text is not None
         assert "welcome" in text
+
+
+class TestBeautyIntegration:
+    """Beauty pre-pass wiring through the director executor."""
+
+    def _edl(self, source: Path) -> EditDecisionList:
+        return EditDecisionList(
+            project_source=str(source),
+            decisions=[
+                Decision(
+                    id="c",
+                    kind="cut",
+                    source_span=(0.0, 5.0),
+                    rationale="test cut",
+                    status="accepted",
+                )
+            ],
+        )
+
+    def test_beauty_prepass_called_when_beauty_set(
+        self, lesson: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import openclip.director.executor as executor
+
+        calls: list[tuple] = []
+
+        def fake_prepass(
+            source_path: str,
+            output_path: str,
+            config: BeautyConfig,
+            face_analysis: object,
+            fps: float,
+            width: int,
+            height: int,
+        ) -> None:
+            calls.append((source_path, output_path, config, fps, width, height))
+
+        monkeypatch.setattr(executor, "beauty_prepass", fake_prepass)
+        monkeypatch.setattr(executor, "beauty_available", lambda: True)
+        monkeypatch.setattr(
+            executor,
+            "render_export",
+            lambda *a, **k: RenderResult(
+                out=Path(k["out_path"]),
+                kept_duration_s=0.0,
+                segments=1,
+                cuts_applied=0,
+                captions_burned=False,
+                audio_enhanced=False,
+            ),
+        )
+
+        project = Project.create(source=str(lesson), script_text="")
+        media = MediaInfo(
+            path=Path(lesson),
+            duration_s=10.0,
+            has_video=True,
+            width=320,
+            height=180,
+            fps=30.0,
+        )
+        out = tmp_path / "out.mp4"
+        render_edl(
+            project,
+            media,
+            self._edl(lesson),
+            out,
+            RenderOptions(beauty=BeautyConfig()),
+            require_review=False,
+        )
+
+        assert len(calls) == 1, "beauty_prepass must be invoked when RenderOptions.beauty is set"
+        assert calls[0][0] == str(lesson)
+        assert calls[0][2] == BeautyConfig()
+        assert calls[0][3] == 30.0  # fps passed through
+        assert calls[0][4] == 320  # width passed through
+
+    def test_beauty_none_byte_identical_path(
+        self, lesson: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """beauty=None leaves the render path completely unchanged (byte-identical guarantee).
+
+        beauty_prepass must not be invoked and render_export must receive the
+        original media (source path untouched), so output is byte-identical to
+        pre-Phase-10 behavior.
+        """
+        import openclip.director.executor as executor
+
+        prepass_calls: list = []
+        export_media: list = []
+
+        monkeypatch.setattr(executor, "beauty_available", lambda: True)
+        monkeypatch.setattr(
+            executor, "beauty_prepass", lambda *a, **k: prepass_calls.append(a)
+        )
+        monkeypatch.setattr(
+            executor,
+            "render_export",
+            lambda *a, **k: export_media.append(k.get("media"))
+            or RenderResult(
+                out=Path(k["out_path"]),
+                kept_duration_s=0.0,
+                segments=1,
+                cuts_applied=0,
+                captions_burned=False,
+                audio_enhanced=False,
+            ),
+        )
+
+        project = Project.create(source=str(lesson), script_text="")
+        media = MediaInfo(
+            path=Path(lesson),
+            duration_s=10.0,
+            has_video=True,
+            width=320,
+            height=180,
+            fps=30.0,
+        )
+        out = tmp_path / "out.mp4"
+        render_edl(
+            project,
+            media,
+            self._edl(lesson),
+            out,
+            RenderOptions(beauty=None),
+            require_review=False,
+        )
+
+        assert prepass_calls == [], "beauty_prepass must not be invoked when beauty is None"
+        assert export_media == [media], "original media must be passed through unchanged"

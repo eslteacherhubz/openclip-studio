@@ -17,10 +17,13 @@ their own decision status, not by burn_captions).
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from dataclasses import replace
 from pathlib import Path
 
+from openclip.ai.beauty import beauty_available, beauty_prepass
+from openclip.ai.face_analysis import CachedFaceAnalysis, default_provider
 from openclip.ai.render_primitives import (
     CaptionBlock,
     audio_chain_for_enhancement,
@@ -354,21 +357,49 @@ def render_edl(
             audio_chain = chain
 
     ass_text = compose_ass(project, media, cut_spans, edl, burn_captions=opts.burn_captions)
-    return render_export(
-        media=media,
-        kept=kept,
-        cut_spans=cut_spans,
-        ass_text=ass_text,
-        audio_chain=audio_chain,
-        out_path=out_path,
-        opts=opts,
-        progress=progress,
-        video_filters=video_filters or None,
-        broll=broll_overlays or None,
-        out_fps=out_fps,
-        caption_filter=caption_filter,
-        final_scale=final_scale,
-    )
+
+    # Beauty pre-pass: when enabled AND vision deps available, decode the source,
+    # apply the beauty chain per-frame via face analysis, and re-encode to an
+    # intermediate master that becomes the render source. When beauty is None or
+    # unavailable the existing path is used unchanged (byte-identical guarantee).
+    source_media = media
+    intermediate_path: Path | None = None
+    if opts.beauty is not None and beauty_available():
+        intermediate_path = Path(str(out_path)).with_name(
+            Path(str(out_path)).stem + "_beauty_master.mp4"
+        )
+        cached_face_analysis = CachedFaceAnalysis(default_provider())
+        beauty_prepass(
+            str(media.path),
+            str(intermediate_path),
+            opts.beauty,
+            cached_face_analysis,
+            media.fps if media.fps > 0 else 25.0,
+            media.width or 1280,
+            media.height or 720,
+        )
+        source_media = replace(media, path=intermediate_path)
+
+    try:
+        return render_export(
+            media=source_media,
+            kept=kept,
+            cut_spans=cut_spans,
+            ass_text=ass_text,
+            audio_chain=audio_chain,
+            out_path=out_path,
+            opts=opts,
+            progress=progress,
+            video_filters=video_filters or None,
+            broll=broll_overlays or None,
+            out_fps=out_fps,
+            caption_filter=caption_filter,
+            final_scale=final_scale,
+        )
+    finally:
+        if intermediate_path is not None:
+            with contextlib.suppress(OSError):
+                intermediate_path.unlink(missing_ok=True)
 
 
 def kept_intervals_from_spans(

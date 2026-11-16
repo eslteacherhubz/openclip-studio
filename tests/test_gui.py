@@ -10,6 +10,8 @@ import pytest
 # Must be set before QApplication is created.
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from openclip.ai.beauty import beauty_available
+
 pytestmark = pytest.mark.gui
 
 
@@ -296,4 +298,44 @@ def test_reframe_preview_stays_empty_without_media(qapp) -> None:
     assert win.media is None
     win.chk_auto_reframe.setChecked(True)
     assert win.reframe_preview.points == []
+    win.close()
+
+
+def test_beauty_checkbox_and_sliders(window) -> None:
+    assert hasattr(window, "chk_beauty")
+    assert not window.chk_beauty.isChecked()  # opt-in
+    assert window.chk_beauty.isEnabled() is beauty_available()
+    assert window.slider_beauty_skin.value() == 15  # 15%
+    assert window.slider_beauty_jaw.value() == 10  # 10%
+    assert window.slider_beauty_neck.value() == 10  # 10%
+    # sliders disabled until the checkbox is checked
+    assert not window.slider_beauty_skin.isEnabled()
+    assert not window.slider_beauty_jaw.isEnabled()
+    assert not window.slider_beauty_neck.isEnabled()
+
+    window.chk_beauty.setChecked(True)
+    assert window.chk_beauty.isChecked()
+    assert window.slider_beauty_skin.isEnabled()
+    assert window.slider_beauty_jaw.isEnabled()
+    assert window.slider_beauty_neck.isEnabled()
+
+    window.chk_beauty.setChecked(False)
+    assert not window.slider_beauty_skin.isEnabled()
+
+
+def test_beauty_checkbox_disabled_without_vision(
+    qapp, lesson_media, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import openclip.gui.main_window as mw
+
+    monkeypatch.setattr(mw, "beauty_available", lambda: False)
+    from openclip.engine.ffmpeg import probe
+    from openclip.engine.project import Project
+    from openclip.gui.main_window import MainWindow
+
+    win = MainWindow()
+    win.project = Project.create(source=lesson_media, script_text="")
+    win.media = probe(lesson_media)
+    assert not win.chk_beauty.isEnabled()
+    assert "Requires numpy + opencv (vision extra)" in win.chk_beauty.toolTip()
     win.close()

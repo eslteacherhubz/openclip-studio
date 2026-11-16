@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from dataclasses import dataclass
+
 try:
     import cv2
     import numpy as np
@@ -12,7 +15,28 @@ except ImportError:  # pragma: no cover
     np = None  # type: ignore[assignment]
     _HAS_VISION = False
 
-from openclip.ai.face_analysis import FaceFrame, Rect
+from openclip.ai.face_analysis import CachedFaceAnalysis, FaceFrame, Rect
+
+
+@dataclass(frozen=True)
+class BeautyConfig:
+    """Beauty/retouching pre-pass configuration; all intensities clamped to [0, 1]."""
+
+    skin_smooth: float = 0.15
+    jaw_slim: float = 0.10
+    neck_tighten: float = 0.10
+    blemishes: tuple[Rect, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "skin_smooth", max(0.0, min(1.0, float(self.skin_smooth)))
+        )
+        object.__setattr__(
+            self, "jaw_slim", max(0.0, min(1.0, float(self.jaw_slim)))
+        )
+        object.__setattr__(
+            self, "neck_tighten", max(0.0, min(1.0, float(self.neck_tighten)))
+        )
 
 
 def beauty_available() -> bool:
@@ -149,3 +173,249 @@ def smooth_skin(
         out[:, :, c] = np.clip(blended, 0, 255).astype(np.uint8)
 
     return out
+
+
+def micro_sculpt(
+    frame: np.ndarray,
+    face_frame: FaceFrame,
+    jaw_slim: float = 0.10,
+    neck_tighten: float = 0.10,
+) -> np.ndarray:
+    """Apply gentle jaw/neck tightening via sparse landmark-driven warping.
+
+    Uses cv2.remap with a smooth displacement field derived from
+    ``face_frame.jaw_neck_landmarks``. The warp is confined to the face/neck
+    region with a radial falloff so background pixels remain byte-identical.
+
+    Args:
+        frame: Input BGR image (H, W, 3) uint8.
+        face_frame: FaceFrame with jaw_neck_landmarks (normalized 0-1).
+        jaw_slim: Jaw slimming strength in [0, 1]. 0 = passthrough.
+        neck_tighten: Neck tightening strength in [0, 1]. 0 = passthrough.
+
+    Returns:
+        Warped frame with identical dtype/shape to input.
+
+    Raises:
+        RuntimeError: If vision dependencies are not available.
+    """
+    if not _HAS_VISION:
+        raise RuntimeError("Vision dependencies (numpy, opencv) not available")
+
+    if frame.size == 0:
+        return frame
+
+    jaw_slim = max(0.0, min(1.0, jaw_slim))
+    neck_tighten = max(0.0, min(1.0, neck_tighten))
+    if jaw_slim == 0.0 and neck_tighten == 0.0:
+        return frame.copy()
+
+    h, w = frame.shape[:2]
+    max_disp = 0.015 * w  # 1.5% of frame width
+
+    # Build influence mask from skin_mask_cells (same region as smooth_skin)
+    mask = _rasterize_mask(face_frame.skin_mask_cells, h, w)
+    mask = _apply_exclusions(mask, face_frame.exclusion_zones, h, w)
+
+    # Extend mask downward to cover neck region
+    # Find bottom of skin mask and extend
+    mask_indices = np.where(mask > 0)
+    if mask_indices[0].size > 0:
+        bottom_y = int(mask_indices[0].max())
+        neck_extension = int(0.15 * h)  # extend ~15% of frame height down
+        neck_bottom = min(h, bottom_y + neck_extension)
+        mask[bottom_y:neck_bottom, :] = np.maximum(
+            mask[bottom_y:neck_bottom, :],
+            np.linspace(1.0, 0.0, neck_bottom - bottom_y)[:, np.newaxis],
+        )
+
+    # Feather the mask further for smooth falloff
+    mask = cv2.GaussianBlur(mask, (0, 0), sigmaX=w * 0.02, sigmaY=h * 0.02)
+    mask = np.clip(mask, 0.0, 1.0)
+
+    # Initialize displacement maps
+    base_x = np.arange(w, dtype=np.float32)
+    base_y = np.arange(h, dtype=np.float32)
+    map_x, map_y = np.meshgrid(base_x, base_y)
+
+    disp_x = np.zeros((h, w), dtype=np.float32)
+    disp_y = np.zeros((h, w), dtype=np.float32)
+
+    # Process jaw landmarks (first 6 points) for jaw slimming
+    landmarks = face_frame.jaw_neck_landmarks
+    if jaw_slim > 0.0:
+        for _i, pt in enumerate(landmarks[:6]):
+            if pt is None:
+                continue
+            lx, ly = pt
+            px = int(lx * w)
+            py = int(ly * h)
+            # Displace horizontally toward center (slimming)
+            dx = (face_frame.center_x * w - px) * jaw_slim
+            dx = np.clip(dx, -max_disp, max_disp)
+            # Apply with radial falloff
+            dy_grid, dx_grid = np.ogrid[:h, :w]
+            dist = np.sqrt((dx_grid - px) ** 2 + (dy_grid - py) ** 2)
+            falloff = np.exp(-(dist / (w * 0.12)) ** 2)
+            disp_x += dx * falloff * mask
+
+    # Process neck landmarks (last 2 points) for neck tightening
+    if neck_tighten > 0.0:
+        for _i, pt in enumerate(landmarks[6:8]):
+            if pt is None:
+                continue
+            lx, ly = pt
+            px = int(lx * w)
+            py = int(ly * h)
+            # Displace horizontally toward center (tightening)
+            dx = (face_frame.center_x * w - px) * neck_tighten
+            dx = np.clip(dx, -max_disp, max_disp)
+            # Apply with radial falloff
+            dy_grid, dx_grid = np.ogrid[:h, :w]
+            dist = np.sqrt((dx_grid - px) ** 2 + (dy_grid - py) ** 2)
+            falloff = np.exp(-(dist / (w * 0.15)) ** 2)
+            disp_x += dx * falloff * mask
+
+    # Apply displacement
+    map_x = map_x + disp_x
+    map_y = map_y + disp_y
+
+    # Clamp to valid range
+    map_x = np.clip(map_x, 0, w - 1)
+    map_y = np.clip(map_y, 0, h - 1)
+
+    # Remap using cv2.remap (INTER_LINEAR for quality)
+    out = cv2.remap(frame, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+
+    return out
+
+
+def spot_heal(
+    frame: np.ndarray,
+    face_frame: FaceFrame,
+    blemishes: Sequence[Rect] = (),
+) -> np.ndarray:
+    """Inpaint blemishes that track the face center.
+
+    ``blemishes`` are normalized rects ``(rel_x, rel_y, w, h)`` where
+    ``rel_x``/``rel_y`` are offsets from ``face_frame.center_x``/``center_y``,
+    so the box follows the face as it moves. ``w``/``h`` are normalized to
+    frame width/height.
+
+    Args:
+        frame: Input BGR image (H, W, 3) uint8.
+        face_frame: FaceFrame providing the anchor center.
+        blemishes: Sequence of relative normalized blemish rects. Empty = passthrough.
+
+    Returns:
+        Inpainted frame with identical dtype/shape to input.
+
+    Raises:
+        RuntimeError: If vision dependencies are not available.
+    """
+    if not _HAS_VISION:
+        raise RuntimeError("Vision dependencies (numpy, opencv) not available")
+
+    if frame.size == 0:
+        return frame
+
+    if len(blemishes) == 0:
+        return frame.copy()
+
+    h, w = frame.shape[:2]
+
+    # Convert relative normalized rects to absolute pixel coordinates
+    mask = np.zeros((h, w), dtype=np.uint8)
+    for (rel_x, rel_y, bw, bh) in blemishes:
+        abs_nx = face_frame.center_x + rel_x
+        abs_ny = face_frame.center_y + rel_y
+        x1 = int(abs_nx * w)
+        y1 = int(abs_ny * h)
+        x2 = int((abs_nx + bw) * w)
+        y2 = int((abs_ny + bh) * h)
+        x1 = max(0, min(x1, w - 1))
+        y1 = max(0, min(y1, h - 1))
+        x2 = max(x1 + 1, min(x2, w))
+        y2 = max(y1 + 1, min(y2, h))
+        mask[y1:y2, x1:x2] = 255
+
+    if not mask.any():
+        return frame.copy()
+
+    # Inpaint with TELEA algorithm
+    inpainted = cv2.inpaint(frame, mask, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
+
+    # Feather mask edges for seamless blend
+    feathered = cv2.GaussianBlur(mask, (0, 0), sigmaX=2.0, sigmaY=2.0)
+    feathered = feathered.astype(np.float32) / 255.0
+    feathered = np.clip(feathered, 0.0, 1.0)
+
+    # Blend inpainted result with original through feathered mask
+    out = frame.copy()
+    for c in range(3):
+        orig_ch = frame[:, :, c].astype(np.float32)
+        inpaint_ch = inpainted[:, :, c].astype(np.float32)
+        blended = orig_ch * (1.0 - feathered) + inpaint_ch * feathered
+        out[:, :, c] = np.clip(blended, 0, 255).astype(np.uint8)
+
+    return out
+
+
+def beauty_prepass(
+    source_path: str,
+    output_path: str,
+    config: BeautyConfig,
+    face_analysis: CachedFaceAnalysis,
+    fps: float,
+    width: int,
+    height: int,
+) -> None:
+    """Decode ``source_path``, apply the beauty chain per-frame, re-encode to ``output_path``.
+
+    For each frame the chain ``smooth_skin -> micro_sculpt -> spot_heal`` is
+    applied using the face analysis for that frame. Frames with no detected
+    face are written through unchanged. The output matches the source fps and
+    dimensions and is encoded with the H.264 (avc1) codec at high quality.
+
+    Raises:
+        RuntimeError: If vision dependencies (numpy, opencv) are unavailable or
+            the source/video writer cannot be opened.
+    """
+    if not beauty_available():
+        raise RuntimeError("Vision dependencies (numpy, opencv) not available")
+
+    cap = cv2.VideoCapture(source_path)
+    if not cap.isOpened():
+        raise RuntimeError(f"Cannot open source video: {source_path}")
+
+    # H.264 (avc1) fourcc: cv2.VideoWriter_fourcc("avc1") packed as a little-endian int.
+    fourcc = ord("a") | (ord("v") << 8) | (ord("c") << 16) | (ord("1") << 24)
+    writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+    if not writer.isOpened():
+        cap.release()
+        raise RuntimeError(f"Cannot open video writer for: {output_path}")
+
+    try:
+        frame_index = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            timestamp = frame_index / fps if fps > 0 else 0.0
+            face_frame = face_analysis.analyze_frame(frame_index, timestamp)
+            if face_frame is None:
+                writer.write(frame)
+            else:
+                out = smooth_skin(frame, face_frame, intensity=config.skin_smooth)
+                out = micro_sculpt(
+                    out,
+                    face_frame,
+                    jaw_slim=config.jaw_slim,
+                    neck_tighten=config.neck_tighten,
+                )
+                out = spot_heal(out, face_frame, blemishes=config.blemishes)
+                writer.write(out)
+            frame_index += 1
+    finally:
+        cap.release()
+        writer.release()
