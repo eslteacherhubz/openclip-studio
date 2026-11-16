@@ -308,19 +308,23 @@ def test_beauty_checkbox_and_sliders(window) -> None:
     assert window.slider_beauty_skin.value() == 15  # 15%
     assert window.slider_beauty_jaw.value() == 10  # 10%
     assert window.slider_beauty_neck.value() == 10  # 10%
-    # sliders disabled until the checkbox is checked
+    # sliders disabled until the checkbox is checked (and vision available)
     assert not window.slider_beauty_skin.isEnabled()
     assert not window.slider_beauty_jaw.isEnabled()
     assert not window.slider_beauty_neck.isEnabled()
 
-    window.chk_beauty.setChecked(True)
-    assert window.chk_beauty.isChecked()
-    assert window.slider_beauty_skin.isEnabled()
-    assert window.slider_beauty_jaw.isEnabled()
-    assert window.slider_beauty_neck.isEnabled()
+    if beauty_available():
+        window.chk_beauty.setChecked(True)
+        assert window.chk_beauty.isChecked()
+        assert window.slider_beauty_skin.isEnabled()
+        assert window.slider_beauty_jaw.isEnabled()
+        assert window.slider_beauty_neck.isEnabled()
 
-    window.chk_beauty.setChecked(False)
-    assert not window.slider_beauty_skin.isEnabled()
+        window.chk_beauty.setChecked(False)
+        assert not window.slider_beauty_skin.isEnabled()
+    else:
+        # vision unavailable: checkbox disabled; sliders never enable
+        assert not window.chk_beauty.isEnabled()
 
 
 def test_beauty_checkbox_disabled_without_vision(
