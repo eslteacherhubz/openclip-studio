@@ -38,6 +38,7 @@ from openclip.engine.enhance import PRESET_NAMES
 from openclip.engine.ffmpeg import MediaInfo, probe
 from openclip.engine.pipeline import available_transcribers
 from openclip.engine.project import Project
+from openclip.gui.preview import VideoPreviewWidget
 from openclip.gui.reframe_preview import ReframePreviewWidget
 from openclip.gui.workers import (
     AIPlanRequest,
@@ -246,6 +247,9 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.reframe_preview)
         self.chk_auto_reframe.toggled.connect(self._refresh_reframe_preview)
 
+        self.preview = VideoPreviewWidget()
+        layout.addWidget(self.preview)
+
         self.chk_beauty = QCheckBox("Beauty & Retouching")
         self.chk_beauty.setChecked(False)
         if not beauty_available():
@@ -439,6 +443,7 @@ class MainWindow(QMainWindow):
         self.project.captions.animation = self.cmb_animation.currentText()
         self.project.captions.karaoke = self.chk_karaoke.isChecked()
         self.media_label.setText(f"{Path(self.project.source).name} — {self.media.duration_s:.1f}s")
+        self.preview.load(str(self.project.source))
         self.player.setSource(QUrl.fromLocalFile(str(self.project.source)))
         self.slider.setRange(0, int(self.media.duration_s * 1000))
         for btn in (
