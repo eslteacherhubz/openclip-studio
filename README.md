@@ -1,26 +1,27 @@
 # Eterna OpenClip Studio
 
-A bilingual teaching-video editor for language educators. Record a lesson once;
-OpenClip Studio aligns your script to your voice, proposes intelligent cuts
-(mistakes, retakes, silences, filler words), burns in bilingual animated
-captions, enhances the audio, optionally corrects off-camera gaze, and exports a
-finished MP4 — all locally, on your own machine.
+A privacy-first AI video editor for creators. Record once; OpenClip Studio
+aligns your script to your voice, proposes intelligent cuts (mistakes, retakes,
+silences, filler words), burns in animated bilingual captions, enhances audio,
+applies beauty retouching, and exports a finished MP4 — short or long form,
+vertical or horizontal, all locally on your own machine.
 
 > **Privacy-first**: nothing leaves your computer. All analysis (speech
-> recognition, alignment, gaze estimation) runs locally with open-source
-> components. No cloud APIs, no uploads.
+> recognition, alignment, gaze estimation, beauty face-analysis) runs locally
+> with open-source components. No cloud APIs, no uploads. BYOK (bring your own
+> key) is optional — the offline `local_mock` provider is the default.
 
 ## Why
 
-ESL teachers record talking-head lessons in two languages (target language +
-learner language). Turning raw recordings into publishable lessons today means
-hours of manual cutting, captioning and audio cleanup in a general-purpose
-editor. OpenClip Studio automates the parts that are mechanical, and leaves the
-creative decisions to the teacher.
+Creators spend hours on mechanical cutting, captioning, and audio cleanup in
+general-purpose editors. OpenClip Studio automates the mechanical parts and
+leaves the creative decisions to you. Works for talking-head lessons,
+explainer shorts, podcast clips, and any single-camera vertical or horizontal
+footage.
 
 ## Status
 
-Pre-alpha, under active development against the 72-hour roadmap in
+Pre-alpha, under active development against the phased roadmap in
 [docs/ROADMAP.md](docs/ROADMAP.md). Live progress log:
 [docs/CHECKPOINT.md](docs/CHECKPOINT.md). Not production-ready; see
 [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md) for the criteria that must be met
@@ -28,18 +29,22 @@ before any such claim.
 
 ## Features (target)
 
-- **Script alignment** — paste your lesson script; local speech recognition
-  (optional, faster-whisper) with fuzzy word-level alignment maps script
-  sentences to the timeline.
+- **Script alignment** — paste your script; local speech recognition (optional,
+  faster-whisper) with fuzzy word-level alignment maps sentences to the timeline.
 - **Intelligent cuts** — detect and propose removal of off-script speech,
   silences and filler words; every cut is reviewable and reversible.
 - **Bilingual composition** — animated burned-in captions in two languages
   (primary + support), fully configurable position, fonts, animation style.
 - **Audio enhancement** — noise reduction, loudness normalization (EBU R128),
   gentle EQ and gating via FFmpeg filters.
+- **Beauty retouching** — skin smoothing, jaw/neck sculpting, blemish healing
+  as a per-frame pre-pass (cv2 + numpy behind the `gaze`/`vision` extra).
+  Beauty-off is byte-identical to the existing render path — sacred invariant.
 - **Eye-contact correction** (experimental) — warp-based gaze redirection for
   talking-head footage; see [docs/EYE_CONTACT_RESEARCH.md](docs/EYE_CONTACT_RESEARCH.md).
-- **MP4 export** — H.264 + AAC, widely compatible (yuv420p).
+- **Video preview player** — real frame scrubbing + play/pause via OpenCV decode.
+- **MP4 export** — H.264 + AAC, widely compatible (yuv420p); platform presets
+  (9:16 / 1:1 / 4:5) planned.
 
 ## Install (developers)
 
@@ -49,7 +54,8 @@ pytest
 ```
 
 Requires Python 3.11+. FFmpeg/ffprobe are located from `PATH` or bundled via
-`imageio-ffmpeg`.
+`imageio-ffmpeg`. The GUI (`PySide6`) and beauty/preview (`opencv`, `numpy`)
+are optional extras.
 
 ## Usage
 
@@ -63,6 +69,7 @@ openclip auto project.json -o out.mp4   # one-shot: align + plan + render
 openclip ai-edit --media lesson.mp4 --prompt "Make a short clip about the main topic" \
     --transcript transcript.txt -o out.mp4                 # prints review JSON, no render
 openclip ai-edit --media lesson.mp4 --prompt "..." -o out.mp4 --auto-accept   # renders MP4
+openclip ai-edit --media lesson.mp4 --prompt "..." -o out.mp4 --auto-accept --beauty --beauty-smooth 0.15  # with beauty pre-pass
 ```
 
 Desktop app (Windows/Linux; needs the `gui` extra):
@@ -72,10 +79,9 @@ pip install ".[gui]"
 openclip-gui         # or: openclip gui
 ```
 
-Workflow: **New project** → pick your recording → paste the bilingual
-script (`English :: 支持语言` blocks) → **Analyze** (local whisper if
-installed, else silence-only cuts) → review proposed cuts (uncheck to keep)
-→ tune captions/audio settings → **Export MP4**.
+Workflow: **New project** → pick your recording → paste the script → **Analyze**
+(local whisper if installed, else silence-only cuts) → review proposed cuts
+(uncheck to keep) → tune captions/audio/beauty settings → **Export MP4**.
 
 The desktop app also has an **AI Director** panel: type a prompt, press
 **AI Plan…** to get AI-proposed cuts/clips/zooms/B-roll/export settings as an
@@ -92,10 +98,9 @@ artifact `OpenClipStudio-windows-x64`):
   `OpenClipStudio\OpenClipCLI.exe` (headless CLI for automation).
 - **Bundled and verified by automated Windows CI**: the editing engine
   (probing, cuts, captions, audio enhancement, MP4 export — FFmpeg binary is
-  included, no separate install), the GUI shell, the gaze-correction
-  libraries (OpenCV + cascade data), and the whisper transcription runtime
-  (faster-whisper + ctranslate2). Each of these is exercised inside the
-  frozen app by the packaging smoke tests before an artifact is produced.
+  included, no separate install), the GUI shell, and the gaze/beauty libraries
+  (OpenCV + cascade data). Each is exercised inside the frozen app by the
+  packaging smoke tests before an artifact is produced.
 - **First-launch download (the only internet step)**: the first whisper run
   downloads the selected model once (e.g. ~75 MB for `tiny`) to your user
   cache; transcription afterwards is fully offline. No other feature needs
@@ -106,7 +111,7 @@ artifact `OpenClipStudio-windows-x64`):
 
 ## Documentation map
 
-- [docs/ROADMAP.md](docs/ROADMAP.md) — the bounded 72-hour plan
+- [docs/ROADMAP.md](docs/ROADMAP.md) — phased development plan (done + next)
 - [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md) — per-stage acceptance criteria + dependency license ledger
 - [docs/CHECKPOINT.md](docs/CHECKPOINT.md) — exact progress state (start here when resuming work)
 - [docs/EYE_CONTACT_RESEARCH.md](docs/EYE_CONTACT_RESEARCH.md) — gaze-correction experiments, numbers, limits
@@ -114,6 +119,7 @@ artifact `OpenClipStudio-windows-x64`):
 - [docs/PRODUCTION_DIRECTOR.md](docs/PRODUCTION_DIRECTOR.md) — architecture for automated, reviewable editing decisions
 - [docs/OWNER_VALIDATION.md](docs/OWNER_VALIDATION.md) — what to run on the real Windows machine
 - [docs/research/EDITOR_VERIFICATION.md](docs/research/EDITOR_VERIFICATION.md) — why we build focused instead of forking Shotcut/Kdenlive
+- [docs/MERGE_PLAN.md](docs/MERGE_PLAN.md) — merge analysis for the stacked PR chain #7–#14 (analysis only)
 
 ## License
 

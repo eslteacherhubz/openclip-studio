@@ -1,168 +1,82 @@
 # CHECKPOINT — exact, resumable progress state
 
-Last updated: 2026-10-12 — Correction pass 2 (PR #6 final correction) complete and CI-verified.
+Last updated: 2026-11-16 — Phase 10 Objective 4 (Beauty Engine Integration) complete
+and CI-verified; Priority 3 (video preview player) complete and CI-verified.
 
-## Correction pass 2 (this branch, on top of correction pass 1)
+## Current state
 
-Three corrections per the review assignment, all regression-tested:
+The feature chain `feature/ai-face-analysis-tracking` is 43 commits ahead of `main`
+(merge base `d71452f` Stage 0 bootstrap). `main` carries only 2 CI-infra commits
+the feature chain lacks (`3317ad9` register workflow, `a608f2a` fix workflow
+syntax). All Phase 8–10 work plus Priority 3 are landed on this branch, not yet
+merged to `main`. See docs/MERGE_PLAN.md for the merge analysis.
 
-1. **Director overlay timing** — `director/executor.py` previously rendered
-   callout/title events at raw *source-timeline* spans. Now every overlay
-   span is mapped through `map_span` against the normalized accepted cuts;
-   overlays fully inside cuts are dropped. Video-render regression test
-   `tests/test_director_render_timing.py` probes exported frames (ffmpeg
-   BMP dumps parsed with stdlib) for the callout colour: before cuts,
-   clipped at cut start, between cuts, clipped at cut end, after all cuts,
-   fully removed, plus raw-timestamp sentinel frames that must stay empty.
-   Negative control verified: with raw spans the sentinels show 289/320/285
-   px (bug detected at 3.8 s, 5.2 s, 6.4 s); with the fix <10 px.
-2. **Review enforcement** — captions now render ONLY for accepted
-   `caption` decisions (the old path burned captions from project state,
-   ignoring the EDL); pending decisions never render even with
-   `require_review=False`; `RenderOptions.burn_captions` suppresses
-   captions only (callouts/titles governed by their own decision status);
-   engine `render_project` behavior unchanged (all prior tests green).
-   Found+fixed a related engine defect while testing: marker lines
-   ("Keyword: ...") were being fuzzy-matched by the aligner, stealing the
-   next sentence's ASR words and unaligning it. Markers are now detected in
-   `engine/script.py` (`is_marker_text`/`marker_payload`) and skipped by
-   both aligner paths.
-3. **Cut normalization** — new public `engine/render.py::normalize_cut_spans`
-   (sort + merge overlapping/duplicate/adjacent) used by `map_span`,
-   `render_project`, and the director executor, so removed time is counted
-   exactly once everywhere. The assigned case is tested: cuts [3,7]+[5,9]
-   inside a 0–10 s caption → 4 s output interval. Kept-interval complement
-   and `map_span` cross-checked for agreement.
+### Phases complete (this branch)
 
-## Verification record (correction pass 2)
+| Phase | Objective | Where | State |
+|---|---|---|---|
+| 8 | Smart reframing — subject-tracking 9:16 crop | `src/openclip/ai/reframing.py`, `gui/reframe_preview.py` | landed (f53ad67) |
+| 9 | Shared face-analysis tracking layer | `src/openclip/ai/face_analysis.py` (Mock + stubbed MediaPipe providers, CachedFaceAnalysis, smoothing) | landed (d04abb7) |
+| 10 Obj 1 | Beauty engine core — frequency-separation skin smoothing | `src/openclip/ai/beauty.py` (`smooth_skin`) | landed (a9cc0b3) |
+| 10 Obj 2 | Beauty engine — micro-sculpt + spot-heal | `src/openclip/ai/beauty.py` (`micro_sculpt`, `spot_heal`) | landed (in 46ff86f) |
+| 10 Obj 3 | BeautyConfig + real-provider pipeline | `src/openclip/ai/beauty.py` (`BeautyConfig`, `CachedFaceAnalysis` plumbing) | landed (f8ae61f, 46ff86f) |
+| 10 Obj 4 | **Beauty Engine Integration** — render pipeline + GUI + CLI | `engine/render.py` (`RenderOptions.beauty`), `director/executor.py` (pre-pass), `cli.py` (`--beauty`/`--beauty-smooth/jaw/neck`), `gui/main_window.py` + `gui/workers.py` (checkbox + sliders), `gui/preview.py` | landed (46ff86f, ed2b3c1, 2d4baeb) |
+| Priority 3 | Real video preview player (CORE) | `src/openclip/gui/preview.py` (`VideoPreviewWidget`: load/seek/play-pause, cv2-guarded placeholder, release-on-close) | landed (2d4baeb) |
 
-- Local (dev sandbox): 103 passed, ruff clean, `mypy --strict` clean
-  (28 files). ASR integration tests run locally (faster-whisper +
-  espeak-ng installed).
-- CI, code-complete SHA `519022f`, run 38198487097: **9/9 jobs green** —
-  lint, mypy, test (3.11: 90 passed/13 skipped), test (3.12), gui (offscreen
-  PySide6), gaze (rig experiments), test-windows (3.11 + 3.12 — the pixel
-  overlay-timing regression runs on real Windows with libass), and
-  package-windows (frozen artifact + smoke battery).
-- This checkpoint commit is docs-only; the final head SHA gets its own
-  dispatched green run recorded below.
+Byte-identical guarantee: when `RenderOptions.beauty is None` the render path is
+completely unchanged — `director/executor.py` short-circuits and passes the
+original `media` through untouched; no existing render logic was modified.
 
-## Final SHA verification
+### PR / branch map (#7–#14)
 
-- HEAD at publication of this checkpoint: see `git log -1` — the dispatched
-  CI run for this exact SHA must be green before the work is called
-  complete (recorded here once finished).
+| PR | Branch | Content | State |
+|---|---|---|---|
+| #7 | feature/ai-transcript-clip-byok | transcript-based editing, ai-edit-transcript CLI, BYOK GUI selector | landed on chain |
+| #8 | feature/ai-provider-foundation | BYOK provider foundation + mock provider | landed on chain |
+| #9 | feature/ai-render-primitives-cli | render primitives (zoom/audio) + end-to-end CLI | landed on chain |
+| #10 | feature/ai-gui-transcript-captions | transcript editing panel + customizable caption styles + GUI review | landed on chain |
+| #11 | feature/ai-edl-schema | AI director EDL schema + review bridge | landed on chain |
+| #12 | feature/ai-face-analysis-tracking | smart reframing + shared face-analysis + beauty engine + preview | **this branch (HEAD 2d4baeb)** |
+| #13 | feature/ai-broll-export-gui | B-roll / export-config rendering + GUI review integration | not yet merged |
+| #14 | feature/ai-customization-intelligence | customization intelligence layer | not yet merged |
 
-## Environment (dev sandbox where this work ran)
+Chain order (bottom → top): #7 → #8 → #9 → #10 → #11 → #12 → #13 → #14.
 
-- Linux aarch64 (Debian 12), 8 vCPU (shared/throttled — identical ffmpeg runs
-  measured 7s–290s), 7.5 GB RAM, no GPU, no camera.
+## Verification record
+
+- Local (dev sandbox): **377 passed**, ruff clean, `mypy --strict` clean (47 source files).
+  - `pytest -q -m gui`: 14 passed (offscreen PySide6)
+  - `pytest -q -m gaze`: 28 passed (cv2 present; real-clip decode/seek/play-pause)
+- CI: green for HEAD `2d4baeb` — run 43865333081 (lint, mypy, test 3.11+3.12,
+  gui offscreen, gaze, test-windows, package-windows).
+- Prior commits `7b38f6d`, `e519310`, `ed2b3c1`, `46ff86f` also green.
+
+## Environment (dev sandbox)
+
+- Linux aarch64 (Debian 12), 8 vCPU (shared/throttled), 7.5 GB RAM, no GPU, no camera.
 - Python 3.11.2 (venv `.venv/`), FFmpeg 5.1.9 (apt) + imageio-ffmpeg wheel,
-  espeak-ng 1.51 (ASR test fixtures), opencv-python 4.14 (pinned <5: OpenCV
-  5.0 removed CascadeClassifier), PySide6 6.8.0.2 + system Qt libs
-  (libegl1 libgl1 libxkbcommon0 libglib2.0-0 libdbus-1-3 libfontconfig1
-  libpulse0 — same set CI installs), faster-whisper (tiny model cached),
-  pyinstaller 6.22 (spec validated locally, incl. asr+gaze frozen features).
+  opencv-python 4.14.0 (pinned <5), PySide6 6.8.0.2 + system Qt libs
+  (libegl1 libgl1 libxkbcommon0 libglib2.0-0 libdbus-1-3 libfontconfig1 libpulse0).
 - `gh` authenticated as `eslteacherhubz` (repo + workflow scopes).
-- Windows **not** available here: covered by CI (`windows-latest` engine
-  tests + packaging smoke incl. frozen export E2E, frozen gaze, frozen
-  whisper via SAPI TTS, GUI alive-check) and by owner validation
-  (docs/OWNER_VALIDATION.md).
-
-## Done — all planned stages + correction pass 1
-
-| Stage | Where | State |
-|---|---|---|
-| 0 Bootstrap (docs, license, editor verification) | `main` d71452f + CI infra 3317ad9/a608f2a | merged |
-| 1 Engine core (alignment, cuts, captions, audio, render, CLI) | PR #1 `feature/engine-core` | green CI, awaiting owner |
-| 2 Desktop app (PySide6, cut review, threaded export) | PR #2 `feature/desktop-app` | green CI, awaiting owner |
-| 3 Eye-contact research (rig, detector, warp, eval harness) | PR #3 `feature/eye-contact` | green CI, awaiting owner |
-| 4 CI matrix + Windows packaging | PR #4 `feature/ci-packaging` | green CI (9/9 jobs; Windows artifact built, zip + sha256) |
-| 5 Hardening + handoff | PR #5 `feature/hardening` | green CI (9/9 jobs) |
-| **Correction 1** | PR #6 `correction/caption-mapping-and-packaging` | green CI (9/9 jobs, run 38168146643) — see below |
-
-### Correction pass 1 (this branch)
-
-1. **P1 — caption/timeline mapping fixed** (`engine/render.py::map_span`):
-   interior cuts now compress spans correctly (caption 0–10s with cut 3–6s →
-   output 0–7s); the old code only shifted by cuts *before* the span start.
-   23 regression tests (`tests/test_caption_mapping.py`) cover multiple
-   cuts, boundary overlaps, fully-removed spans, unsorted cut lists, and
-   duration/monotonicity invariants.
-2. **P2 — Windows package audited and completed**: the artifact previously
-   did **not** contain whisper (asr) or gaze (opencv) — the packaging env
-   installed only `[gui,dev]`. Now bundles `[gui,asr,gaze]` + package data
-   (faster-whisper silero VAD ONNX, OpenCV Haar cascades — both were frozen
-   -runtime failures found by the audit). Verified inside the frozen app on
-   Linux: whisper align with first-use model download (3/3 lines, conf
-   0.92–1.00), `gaze-analyze`, full synth→edit→export→probe, probing with
-   NO ffmpeg/ffprobe on PATH (bundled binary + fallback), GUI alive-check.
-   The Windows packaging job now asserts the same battery (SAPI-TTS speech
-   for frozen whisper). Docs updated to claim exactly what is verified
-   (README feature matrix, ACCEPTANCE).
-3. **P3 — production gap assessment** (`docs/PRODUCTION_GAP_ASSESSMENT.md`):
-   per-requirement implemented/partial/missing with evidence. Headline:
-   script-directed editing core is implemented; eye-contact is
-   research-grade partial; presenter positioning, backgrounds,
-   lighting/colour, diagram timing are missing; captions ≠ motion
-   graphics; Indonesian-specific tuning not started; MP4 baseline solid
-   but unmeasured on target hardware.
-4. **P4 — Production Director** (`docs/PRODUCTION_DIRECTOR.md` +
-   `src/openclip/director/`): deterministic EDL planner (script markers →
-   typed decisions with source line/span/rationale), review gating
-   (pending blocks export), meaning-preservation invariants enforced in
-   `check_invariants`, executor that composes captions+callout/title ASS
-   and refuses unimplemented kinds explicitly (diagram_slot, color_preset,
-   reframe, background, emphasis → named NotImplemented). Behavior-
-   preserving render refactor: public `build_export_ass` + `render_export`
-   (all previous render tests still green). 15 director tests.
-
-Test suite now 70 tests; mypy --strict clean (28 files); ruff clean.
-
-## In flight
-
-- Correction pass 2 pushed to PR #6 (`correction/caption-mapping-and-packaging`);
-  full CI (incl. windows-latest test matrix and the Windows packaging job)
-  dispatched for the new head. Correction pass 1's verification stands: CI
-  run 38168146643, 9/9 jobs (frozen export E2E "10.3s h264/aac", frozen gaze
-  smoke, frozen whisper align 3/3 lines conf 1.00 via SAPI speech +
-  first-use model download, GUI alive-check, artifact upload).
+- Windows not available here: covered by CI (`windows-latest` engine tests +
+  packaging smoke).
 
 ## Blocked
 
-- Nothing technical. Awaiting owner review/merge of PRs #1–#5 (stacked;
-  they conflict with main only until merged in order — CI infra commits on
-  main duplicate branch history; merging #1 first clears the path).
+- Nothing technical. Awaiting owner review/merge of the stacked chain #7→#14.
+  See docs/MERGE_PLAN.md for the recommended merge order and conflict analysis.
 
 ## Next steps (in order)
 
-1. Owner: review + merge PRs #1→#5, then the correction PR.
-2. Owner: run docs/OWNER_VALIDATION.md on the real Windows machine
-   (artifact now includes whisper + gaze; whisper needs one model download).
-3. Next implementation slice per docs/PRODUCTION_DIRECTOR.md §8:
-   colour/lighting presets → auto-framing → diagram slots → EDL review UI.
-4. After real-machine validation + gap closure begins: revisit
-   `docs/PRODUCTION_GAP_ASSESSMENT.md` statuses.
-
-## Key technical notes for resuming sessions
-
-- `probe()` reads ffprobe JSON key `codec_type` (not `type`); falls back to
-  parsing `ffmpeg -i` (verified in the frozen bundle with empty PATH).
-- `map_span`: endpoints shift by cuts strictly before them; spans clip
-  against cuts first, then shift. Regression tests are the contract.
-- PyInstaller: optional feature data must be added via `_optional_datas`
-  in `packaging/openclip.spec` (faster-whisper assets, cv2/data) — package
-  data is NOT auto-collected even when the module is.
-- Frozen whisper needs HF model download on first use (internet once);
-  error path in `WhisperTranscriber.transcribe` explains this.
-- Synth lesson is 320x180@15fps CRF24 by design; tests assert the size.
-- Aligner: rapidfuzz `token_sort_ratio`; marker lines are never spoken —
-  the director planner attaches them to the next aligned spoken line.
-- Director EDL: deterministic JSON (sorted keys, ordered decisions); cuts
-  may only come from the reviewed cut plan; pending decisions block export.
-- Actions YAML: no unquoted colons in step names; actionlint before push;
-  PR-event CI unreliable in this repo — use `gh workflow run ci.yml --ref`.
-- mypy CI job needs `[dev,gui,gaze]` (PySide6/numpy/cv2 stubs).
+1. Owner: review + merge PRs #7→#14 in chain order (see docs/MERGE_PLAN.md).
+2. After merge: Phase 11 — real MediaPipe provider behind
+   `MediaPipeFaceAnalysisProvider` (currently a stub) + real-footage validation
+   test (beauty_off byte-identical on real footage; beauty_on visual parity).
+3. Phase 12: hook / viral-moment detection.
+4. Phase 13: contextual B-roll sourcing.
+5. Phase 14: platform export presets.
+6. Phase 15: quality/perf (incl. high-quality beauty intermediate).
+7. Phase 16: beta hardening.
 
 ## Resume protocol for a new session
 
