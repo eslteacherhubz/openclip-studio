@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
-import os
 import subprocess
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -377,12 +375,14 @@ def beauty_prepass(
 
     For each frame the chain ``smooth_skin -> micro_sculpt -> spot_heal`` is
     applied using the face analysis for that frame. Frames with no detected
-    face are written through unchanged. The output matches the source fps and
-    dimensions and is encoded with the H.264 (avc1) codec at high quality.
+    face are written through unchanged. Decoded frames are piped as raw BGR
+    into an FFmpeg encoder (libx264, CRF 16) so the intermediate is true
+    high-quality H.264 rather than a lossy cv2 codec fallback; the source
+    audio stream is muxed in unchanged.
 
     Raises:
-        RuntimeError: If vision dependencies (numpy, opencv) are unavailable or
-            the source/video writer cannot be opened.
+        RuntimeError: If vision dependencies (numpy, opencv) are unavailable,
+            the source cannot be opened, or the FFmpeg encoder fails.
     """
     if not beauty_available():
         raise RuntimeError("Vision dependencies (numpy, opencv) not available")
@@ -391,19 +391,34 @@ def beauty_prepass(
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open source video: {source_path}")
 
-    # H.264 (avc1) fourcc: cv2.VideoWriter_fourcc("avc1") packed as a little-endian int.
-    # Fall back to mp4v when avc1 is unsupported by the cv2 build.
-    fourcc = ord("a") | (ord("v") << 8) | (ord("c") << 16) | (ord("1") << 24)
-    video_tmp = output_path + ".videoonly.mp4"
-    writer = cv2.VideoWriter(video_tmp, fourcc, fps, (width, height))
-    if not writer.isOpened():
-        writer.release()
-        fourcc = ord("m") | (ord("p") << 8) | (ord("4") << 16) | (ord("v") << 24)
-        writer = cv2.VideoWriter(video_tmp, fourcc, fps, (width, height))
-        if not writer.isOpened():
-            cap.release()
-            writer.release()
-            raise RuntimeError("Cannot open video writer for: " + video_tmp)
+    ffmpeg_args = [
+        "ffmpeg", "-y",
+        "-nostats",
+        "-v", "error",
+        "-f", "rawvideo",
+        "-vcodec", "rawvideo",
+        "-pix_fmt", "bgr24",
+        "-s", f"{width}x{height}",
+        "-r", str(fps),
+        "-i", "pipe:0",
+        "-i", source_path,
+        "-map", "0:v",
+        "-map", "1:a:0?",
+        "-c:v", "libx264",
+        "-preset", "medium",
+        "-crf", "16",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "copy",
+        output_path,
+    ]
+    proc = subprocess.Popen(
+        ffmpeg_args,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        shell=False,
+    )
+    assert proc.stdin is not None and proc.stderr is not None
 
     try:
         frame_index = 0
@@ -416,7 +431,7 @@ def beauty_prepass(
                 frame_index, timestamp, frame
             )
             if face_frame is None:
-                writer.write(frame)
+                out = frame
             else:
                 out = smooth_skin(frame, face_frame, intensity=config.skin_smooth)
                 out = micro_sculpt(
@@ -426,31 +441,17 @@ def beauty_prepass(
                     neck_tighten=config.neck_tighten,
                 )
                 out = spot_heal(out, face_frame, blemishes=config.blemishes)
-                writer.write(out)
+            proc.stdin.write(np.ascontiguousarray(out).tobytes())
             frame_index += 1
+    except BrokenPipeError:
+        pass
     finally:
         cap.release()
-        writer.release()
+        proc.stdin.close()
+        returncode = proc.wait()
 
-    # Mux the original audio back into the beautified video (the cv2 writer is
-    # video-only; we remux so the intermediate master keeps source audio).
-    ffmpeg_args = [
-        "ffmpeg", "-y",
-        "-i", video_tmp,
-        "-i", source_path,
-        "-map", "0:v:0",
-        "-map", "1:a:0?",
-        "-c:v", "copy",
-        "-c:a", "copy",
-        output_path,
-    ]
-    try:
-        result = subprocess.run(ffmpeg_args, capture_output=True, text=True, shell=False)
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"ffmpeg audio mux failed (rc={result.returncode}): "
-                f"{result.stderr.strip() or result.stdout.strip()}"
-            )
-    finally:
-        with contextlib.suppress(OSError):
-            os.remove(video_tmp)
+    if returncode != 0:
+        stderr = proc.stderr.read().decode(errors="replace").strip()
+        raise RuntimeError(
+            f"ffmpeg encode failed (rc={returncode}): {stderr or 'no stderr'}"
+        )
