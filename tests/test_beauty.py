@@ -9,6 +9,7 @@ unavailable (importorskip) — NEVER skip on the beauty module itself.
 from __future__ import annotations
 
 import json
+import math
 import subprocess
 from pathlib import Path
 
@@ -105,6 +106,37 @@ def _build_mask(face_frame: FaceFrame) -> np.ndarray:
     mask = _rasterize_mask(face_frame.skin_mask_cells, h, w)
     mask = _apply_exclusions(mask, face_frame.exclusion_zones, h, w)
     return mask
+
+
+def _luma_hf_energy_masked(img: np.ndarray, mask: np.ndarray) -> float:
+    """High-frequency luma energy (luma minus Gaussian low-pass) in masked region."""
+    mask_bool = mask > 0.5
+    if not mask_bool.any():
+        return 0.0
+    luma = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float64)
+    low = cv2.GaussianBlur(luma, (0, 0), sigmaX=2.0, sigmaY=2.0)
+    hf = luma - low
+    return float(np.var(hf[mask_bool]))
+
+
+def _make_face_frame_with_landmarks() -> FaceFrame:
+    """FaceFrame like _make_face_frame but with 8 jaw/neck landmarks populated."""
+    ff = _make_face_frame()
+    cx, cy = ff.center_x, ff.center_y
+    landmarks: list[tuple[float, float]] = []
+    for k in range(6):
+        angle = math.pi * (0.2 + 0.6 * k / 5.0)
+        landmarks.append((cx + 0.15 * math.cos(angle), cy + 0.18 * math.sin(angle)))
+    landmarks.append((cx - 0.05, cy + 0.30))
+    landmarks.append((cx + 0.05, cy + 0.30))
+    return FaceFrame(
+        timestamp=ff.timestamp,
+        center_x=cx,
+        center_y=cy,
+        jaw_neck_landmarks=tuple(landmarks),
+        skin_mask_cells=ff.skin_mask_cells,
+        exclusion_zones=ff.exclusion_zones,
+    )
 
 
 def _make_face_frame() -> FaceFrame:
@@ -373,6 +405,32 @@ class TestMicroSculpt:
         out2 = micro_sculpt(frame, face_frame, jaw_slim=0.15, neck_tighten=0.10)
 
         assert np.array_equal(out1, out2), "Output is not deterministic"
+
+    def test_texture_retention(self) -> None:
+        """Luma high-frequency texture in the skin region retained >= 85% after warp."""
+        frame = _build_synthetic_frame()
+        face_frame = _make_face_frame_with_landmarks()
+
+        mask = _build_mask(face_frame)
+        skin = mask > 0.5
+        before_hf = _luma_hf_energy_masked(frame, mask)
+
+        out = micro_sculpt(frame, face_frame, jaw_slim=1.0, neck_tighten=1.0)
+
+        # Sanity: the warp must actually be active in the skin region
+        assert not np.array_equal(out[skin], frame[skin]), (
+            "Warp should modify the skin region for this test to be meaningful"
+        )
+
+        after_hf = _luma_hf_energy_masked(out, mask)
+        retention_pct = 100.0 * after_hf / before_hf
+        print(
+            f"micro_sculpt texture retention: {retention_pct:.1f}% "
+            f"(before={before_hf:.1f}, after={after_hf:.1f})"
+        )
+        assert retention_pct >= 85.0, (
+            f"Texture retention {retention_pct:.1f}% < 85% — warp is destroying texture"
+        )
 
     def test_zero_passthrough(self) -> None:
         """jaw_slim=0, neck_tighten=0 returns byte-identical copy of input."""

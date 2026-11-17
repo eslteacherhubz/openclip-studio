@@ -188,6 +188,11 @@ def micro_sculpt(
     ``face_frame.jaw_neck_landmarks``. The warp is confined to the face/neck
     region with a radial falloff so background pixels remain byte-identical.
 
+    Frequency separation: the frame is split into a low-frequency layer
+    (Gaussian blur) and a high-frequency layer (original minus low). Only the
+    low-frequency layer is warped; the high-frequency layer (skin texture,
+    pores, fine detail) is re-added unwarped, so texture retention stays high.
+
     Args:
         frame: Input BGR image (H, W, 3) uint8.
         face_frame: FaceFrame with jaw_neck_landmarks (normalized 0-1).
@@ -285,8 +290,20 @@ def micro_sculpt(
     map_x = np.clip(map_x, 0, w - 1)
     map_y = np.clip(map_y, 0, h - 1)
 
-    # Remap using cv2.remap (INTER_LINEAR for quality)
-    out = cv2.remap(frame, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+    # Frequency separation: warp ONLY the low-frequency layer, then re-add
+    # the untouched high-frequency layer so texture is preserved.
+    frame_f = frame.astype(np.float32)
+    low = cv2.GaussianBlur(frame_f, (0, 0), sigmaX=w * 0.01, sigmaY=h * 0.01)
+    high = frame_f - low
+
+    # Remap the low-frequency layer using cv2.remap (INTER_LINEAR for quality)
+    warped_low = cv2.remap(low, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+
+    # Recombine: warped low-frequency geometry + original high-frequency texture.
+    # Outside the influence region disp is exactly 0, so warped_low == low and
+    # warped_low + high == frame; rint guarantees byte-identical background.
+    out_f = warped_low + high
+    out = np.clip(np.rint(out_f), 0, 255).astype(np.uint8)
 
     return out
 
