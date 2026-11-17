@@ -412,7 +412,9 @@ def beauty_prepass(
             if not ret:
                 break
             timestamp = frame_index / fps if fps > 0 else 0.0
-            face_frame = face_analysis.analyze_frame(frame_index, timestamp)
+            face_frame = face_analysis.analyze_frame(
+                frame_index, timestamp, frame
+            )
             if face_frame is None:
                 writer.write(frame)
             else:

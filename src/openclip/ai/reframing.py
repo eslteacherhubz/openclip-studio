@@ -15,8 +15,9 @@ is that real-tracker path: it samples a face-analysis provider (via
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from openclip.ai.face_analysis import (
     CachedFaceAnalysis,
@@ -68,6 +69,7 @@ def tracking_from_face_analysis(
     fps: float,
     duration: float,
     sample_fps: float = 5.0,
+    frame_getter: Callable[[int], Any] | None = None,
 ) -> list[TrackingPoint]:
     """Sample a face-analysis provider into :class:`TrackingPoint`s.
 
@@ -76,6 +78,10 @@ def tracking_from_face_analysis(
     coordinate streams are EWMA-smoothed upstream — at a stride of
     ``fps / sample_fps``. Each resulting :class:`FaceFrame` center becomes one
     :class:`TrackingPoint`; frames with no detection (``None``) are dropped.
+
+    ``frame_getter``, when provided, is called with each ``frame_index`` to
+    fetch the decoded source frame (BGR array) that is forwarded to the
+    provider; providers that do not need pixels (e.g. the mock) ignore it.
     """
     if fps <= 0:
         raise ValueError(f"fps must be > 0, got {fps}")
@@ -88,14 +94,15 @@ def tracking_from_face_analysis(
     total_frames = max(1, int(duration * fps))
     points: list[TrackingPoint] = []
     for frame_index in range(0, total_frames, step):
-        frame = cached.analyze_frame(frame_index, frame_index / fps)
-        if frame is None:
+        frame = frame_getter(frame_index) if frame_getter is not None else None
+        ff = cached.analyze_frame(frame_index, frame_index / fps, frame)
+        if ff is None:
             continue
         points.append(
             TrackingPoint(
-                t=frame.timestamp,
-                x_center_norm=frame.center_x,
-                y_center_norm=frame.center_y,
+                t=ff.timestamp,
+                x_center_norm=ff.center_x,
+                y_center_norm=ff.center_y,
             )
         )
     if not points:

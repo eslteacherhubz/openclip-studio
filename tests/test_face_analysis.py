@@ -15,7 +15,10 @@ from openclip.ai.face_analysis import (
     CachedFaceAnalysis,
     FaceAnalysisProvider,
     FaceFrame,
+    MediaPipeFaceAnalysisProvider,
     MockFaceAnalysisProvider,
+    Point,
+    _build_face_frame,
     default_provider,
     real_tracking_available,
     select_provider,
@@ -44,7 +47,9 @@ class _CountingProvider:
     def __init__(self) -> None:
         self.calls: list[int] = []
 
-    def analyze_frame(self, frame_index: int, timestamp: float) -> FaceFrame | None:
+    def analyze_frame(
+        self, frame_index: int, timestamp: float, frame: object = None
+    ) -> FaceFrame | None:
         self.calls.append(frame_index)
         return _frame(timestamp)
 
@@ -55,7 +60,9 @@ class _NoisyProvider:
     def __init__(self, n: int = 100, seed: int = 7) -> None:
         self._values = [random.Random(seed).uniform(0.2, 0.8) for _ in range(n)]
 
-    def analyze_frame(self, frame_index: int, timestamp: float) -> FaceFrame | None:
+    def analyze_frame(
+        self, frame_index: int, timestamp: float, frame: object = None
+    ) -> FaceFrame | None:
         cx = self._values[frame_index % len(self._values)]
         return _frame(timestamp, center_x=cx, center_y=0.5)
 
@@ -88,7 +95,9 @@ class TestCachedFaceAnalysis:
             def __init__(self) -> None:
                 self.calls = 0
 
-            def analyze_frame(self, frame_index: int, timestamp: float) -> FaceFrame | None:
+            def analyze_frame(
+                self, frame_index: int, timestamp: float, frame: object = None
+            ) -> FaceFrame | None:
                 self.calls += 1
                 return None
 
@@ -199,7 +208,9 @@ class TestTrackingFromFaceAnalysis:
 
     def test_none_results_are_skipped(self) -> None:
         class _AlternatingProvider:
-            def analyze_frame(self, frame_index: int, timestamp: float) -> FaceFrame | None:
+            def analyze_frame(
+                self, frame_index: int, timestamp: float, frame: object = None
+            ) -> FaceFrame | None:
                 if frame_index % 2 == 0:
                     return None
                 return _frame(timestamp)
@@ -227,7 +238,9 @@ class TestTrackingFromFaceAnalysis:
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         class _NoneProvider:
-            def analyze_frame(self, frame_index: int, timestamp: float) -> FaceFrame | None:
+            def analyze_frame(
+                self, frame_index: int, timestamp: float, frame: object = None
+            ) -> FaceFrame | None:
                 return None
 
         with caplog.at_level(logging.WARNING, logger="openclip.ai.reframing"):
@@ -244,3 +257,89 @@ class TestTrackingFromDefaultFaceAnalysis:
         times = [p.t for p in points]
         assert times == sorted(times)
         assert times[0] == 0.0
+
+
+class TestFaceFrameMapping:
+    """Pure landmark -> FaceFrame mapping (synthetic landmarks, no MediaPipe)."""
+
+    def _landmarks(self, placements: dict[int, tuple[float, float]]) -> list[Point | None]:
+        pts: list[Point | None] = [None] * 468
+        for idx, xy in placements.items():
+            pts[idx] = xy
+        return pts
+
+    def test_normalized_bounds_and_populated_regions(self) -> None:
+        from openclip.ai.face_analysis import (
+            FACE_OVAL_IDX,
+            LEFT_EYE_IDX,
+            LIPS_IDX,
+            NOSE_IDX,
+            RIGHT_EYE_IDX,
+        )
+
+        placements: dict[int, tuple[float, float]] = {}
+        for i in FACE_OVAL_IDX:
+            placements[i] = (0.3 + 0.01 * (i % 7), 0.3 + 0.01 * (i // 7))
+        for i in LEFT_EYE_IDX:
+            placements[i] = (0.35, 0.40)
+        for i in RIGHT_EYE_IDX:
+            placements[i] = (0.65, 0.40)
+        for i in LIPS_IDX:
+            placements[i] = (0.50, 0.70)
+        for i in NOSE_IDX:
+            placements[i] = (0.50, 0.55)
+
+        frame = _build_face_frame(
+            timestamp=1.0,
+            landmarks_xy=self._landmarks(placements),
+            width=320,
+            height=240,
+        )
+
+        # center inside the face oval bbox (spread 0.30..0.47 roughly)
+        assert 0.0 <= frame.center_x <= 1.0
+        assert 0.0 <= frame.center_y <= 1.0
+
+        # exclusion zones: left eye, right eye, lips, nostrils
+        assert len(frame.exclusion_zones) == 4, frame.exclusion_zones
+        for zone in frame.exclusion_zones:
+            assert all(0.0 <= v <= 1.0 for v in zone), zone
+
+        # jaw_neck_landmarks: face oval + 2 neck points
+        assert len(frame.jaw_neck_landmarks) == len(FACE_OVAL_IDX) + 2
+        for p in frame.jaw_neck_landmarks:
+            if p is not None:
+                assert 0.0 <= p[0] <= 1.0 and 0.0 <= p[1] <= 1.0
+
+        # skin mask cells: 4 cells
+        assert len(frame.skin_mask_cells) == 4
+        for cell in frame.skin_mask_cells:
+            assert all(0.0 <= v <= 1.0 for v in cell), cell
+
+    def test_all_none_landmarks_degenerate_but_valid(self) -> None:
+        """No face detected -> degenerate frame (center at frame center), not None."""
+        frame = _build_face_frame(
+            timestamp=0.0, landmarks_xy=[None] * 468, width=320, height=240
+        )
+        assert frame.center_x == 0.5
+        assert frame.center_y == 0.5
+        assert frame.jaw_neck_landmarks == ()
+        assert frame.skin_mask_cells == ()
+        assert frame.exclusion_zones == ()
+
+
+@pytest.mark.skipif(
+    not real_tracking_available(), reason="MediaPipe backend (cv2+mediapipe+model) not available"
+)
+class TestMediaPipeFaceAnalysisProvider:
+    """Real MediaPipe FaceLandmarker provider (gaze marker: cv2+mediapipe+model)."""
+
+    def test_blank_image_returns_none(self) -> None:
+        provider = MediaPipeFaceAnalysisProvider()
+        try:
+            import numpy as np
+
+            frame = np.zeros((240, 320, 3), dtype=np.uint8)
+            assert provider.analyze_frame(0, 0.0, frame) is None
+        finally:
+            provider._landmarker.close()
