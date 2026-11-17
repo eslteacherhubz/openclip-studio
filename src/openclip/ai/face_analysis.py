@@ -4,8 +4,8 @@ The reframing layer consumes one :class:`FaceFrame` per video frame. All
 coordinates are normalized to the unit square (0-1 relative to frame width
 and height). Providers implement :class:`FaceAnalysisProvider`;
 :class:`MockFaceAnalysisProvider` is the deterministic default so the pipeline
-runs fully offline, and :class:`MediaPipeFaceAnalysisProvider` is a stub for
-the real MediaPipe/OpenCV backend behind an optional, guarded import.
+runs fully offline, and :class:`MediaPipeFaceAnalysisProvider` is the real
+MediaPipe/OpenCV backend behind an optional, guarded import.
 
 Raw per-frame detections jitter, so :class:`CachedFaceAnalysis` analyzes each
 ``frame_index`` at most once and smooths every coordinate stream with
