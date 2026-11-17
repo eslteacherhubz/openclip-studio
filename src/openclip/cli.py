@@ -6,6 +6,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 from openclip import __version__
 
@@ -305,6 +306,94 @@ def _cmd_ai_edit_transcript(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_ai_clips(args: argparse.Namespace) -> int:
+    """Detect viral hook moments from a transcript → JSON clip proposals."""
+    from openclip.ai.hook_detection import HookDetector
+    from openclip.ai.transcript_editing import parse_transcript
+    from openclip.engine.ffmpeg import probe
+
+    raw = Path(args.transcript).read_text(encoding="utf-8")
+    try:
+        data: object = json.loads(raw)
+    except ValueError:
+        data = raw  # plain text (no timestamps)
+    if isinstance(data, dict) and isinstance(data.get("segments"), list):
+        transcript: list[dict[str, object]] = [
+            {"text": str(item.get("text", "")), "start": item.get("start"), "end": item.get("end")}
+            for item in data["segments"]
+            if isinstance(item, dict)
+        ]
+    elif isinstance(data, list):
+        transcript = [item for item in data if isinstance(item, dict)]
+    else:
+        segments = parse_transcript(data)
+        transcript = [
+            {"text": s.text, "start": s.start_s, "end": s.end_s} for s in segments
+        ]
+
+    media = probe(args.media)
+    detector = HookDetector(transcript)
+    hooks = detector.find_hooks(
+        min_duration=args.min_duration,
+        max_duration=args.max_duration,
+        top_n=args.top,
+    )
+    clips: list[dict[str, Any]] = []
+    for hook in hooks:
+        end = min(hook.end, media.duration_s) if media.duration_s > 0 else hook.end
+        clips.append(
+            {
+                **hook.to_dict(),
+                "end": round(end, 3),
+                "duration": round(end - hook.start, 3),
+            }
+        )
+
+    payload: dict[str, object] = {
+        "media": str(media.path),
+        "duration_s": media.duration_s,
+        "top": args.top,
+        "clips": clips,
+    }
+
+    if args.render:
+        from openclip.engine.ffmpeg import run_ffmpeg
+
+        render_dir = (
+            Path(args.render_dir)
+            if args.render_dir
+            else (Path(args.out).with_suffix("") if args.out else Path("clips")) / "clips"
+        )
+        render_dir.mkdir(parents=True, exist_ok=True)
+        rendered: list[str] = []
+        for index, clip in enumerate(clips):
+            start = float(clip["start"])
+            end = float(clip["end"])
+            hook_type = str(clip["hook_type"])
+            out_path = render_dir / f"clip_{index + 1:02d}_{hook_type}.mp4"
+            run_ffmpeg(
+                [
+                    "-y",
+                    "-ss", f"{start:.3f}",
+                    "-to", f"{end:.3f}",
+                    "-i", str(media.path),
+                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+                    "-pix_fmt", "yuv420p",
+                    "-c:a", "aac", "-b:a", "128k",
+                    str(out_path),
+                ]
+            )
+            rendered.append(str(out_path))
+            print(f"Rendered clip: {out_path}", file=sys.stderr)
+        payload["rendered"] = rendered
+
+    text = json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True)
+    if args.out:
+        Path(args.out).write_text(text + "\n", encoding="utf-8")
+    print(text)
+    return 0
+
+
 def _cmd_gui(args: argparse.Namespace) -> int:
     try:
         from openclip.gui.app import main as gui_main
@@ -492,6 +581,26 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true", help="print the generated EDL JSON without rendering"
     )
     sp.set_defaults(func=_cmd_ai_edit_transcript)
+
+    sp = sub.add_parser(
+        "ai-clips",
+        help="detect viral hook moments from a transcript → JSON clip proposals",
+    )
+    sp.add_argument("--media", required=True, help="input video file")
+    sp.add_argument(
+        "--transcript", required=True, help="timestamped transcript JSON (segments) or text"
+    )
+    sp.add_argument("--top", type=int, default=5, help="number of clips to propose (default: 5)")
+    sp.add_argument("-o", "--out", default=None, help="write the JSON proposals to this file")
+    sp.add_argument("--min-duration", type=float, default=15.0, help="min clip length in s")
+    sp.add_argument("--max-duration", type=float, default=90.0, help="max clip length in s")
+    sp.add_argument(
+        "--render", action="store_true", help="render each proposed clip to its own MP4"
+    )
+    sp.add_argument(
+        "--render-dir", default=None, help="directory for rendered clips (with --render)"
+    )
+    sp.set_defaults(func=_cmd_ai_clips)
 
     sp = sub.add_parser("gui", help="launch the desktop app (needs the 'gui' extra)")
     sp.add_argument("argv", nargs="*", help="arguments passed to Qt")

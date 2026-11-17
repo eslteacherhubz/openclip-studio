@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSlider,
+    QSpinBox,
     QSplitter,
     QStatusBar,
     QTableWidget,
@@ -32,6 +33,7 @@ from PySide6.QtWidgets import (
 )
 
 from openclip.ai.beauty import BeautyConfig, beauty_available
+from openclip.ai.hook_detection import Hook
 from openclip.ai.reframing import DEFAULT_TARGET_ASPECT, tracking_from_default_face_analysis
 from openclip.engine.captions import ANIMATIONS
 from openclip.engine.enhance import PRESET_NAMES
@@ -81,6 +83,7 @@ class MainWindow(QMainWindow):
         self._ai_plan: object | None = None  # AIDirectorPlan
         self._original_transcript: object | None = None  # parsed transcript JSON/text
         self._transcript_decisions: list[object] = []  # Decision list from the diff
+        self._hooks: list[Hook] = []  # detected viral moments (Top Moments table)
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -95,8 +98,9 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self._build_review_panel())
         splitter.addWidget(self._build_transcript_panel())
         splitter.addWidget(self._build_ai_panel())
+        splitter.addWidget(self._build_moments_panel())
         splitter.addWidget(self._build_settings_panel())
-        splitter.setSizes([300, 320, 280, 300, 240])
+        splitter.setSizes([300, 320, 280, 300, 260, 240])
 
         root.addWidget(self._build_player_bar())
         self.setStatusBar(QStatusBar())
@@ -303,6 +307,106 @@ class MainWindow(QMainWindow):
         self.btn_ai_render.setEnabled(False)
         return box
 
+    def _build_moments_panel(self) -> QWidget:
+        box = QGroupBox("Top Moments (viral hooks)")
+        layout = QVBoxLayout(box)
+        btn_row = QHBoxLayout()
+        self.btn_find_moments = QPushButton("Find viral moments")
+        btn_row.addWidget(self.btn_find_moments)
+        btn_row.addWidget(QLabel("Top N:"))
+        self.spin_moments_top = QSpinBox()
+        self.spin_moments_top.setRange(1, 20)
+        self.spin_moments_top.setValue(5)
+        btn_row.addWidget(self.spin_moments_top)
+        layout.addLayout(btn_row)
+        self.moments_table = QTableWidget(0, 6)
+        self.moments_table.setHorizontalHeaderLabels(
+            ["Accept?", "Start (s)", "End (s)", "Hook type", "Score", "Snippet"]
+        )
+        self.moments_table.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(self.moments_table)
+        note = QLabel(
+            "Rule-based hook detection over the loaded transcript. Accepted rows "
+            "become clip proposals in the AI Director panel and render via "
+            "Accept && Render AI…"
+        )
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        self.btn_find_moments.clicked.connect(self.find_viral_moments)
+        self.btn_find_moments.setEnabled(False)
+        return box
+
+    def find_viral_moments(self) -> None:
+        """Run hook detection on the loaded transcript and show Top Moments."""
+        from openclip.ai import parse_transcript
+        from openclip.ai.hook_detection import HookDetector, hooks_to_director_plan
+
+        data = self._original_transcript
+        if data is None:
+            blocks = [
+                b.strip() for b in self.transcript_edit.toPlainText().split("\n\n") if b.strip()
+            ]
+            data = {"segments": [{"text": b} for b in blocks]}
+        segments = parse_transcript(data)
+        transcript: list[dict[str, object]] = [
+            {"text": s.text, "start": s.start_s, "end": s.end_s} for s in segments
+        ]
+        hooks = HookDetector(transcript).find_hooks(top_n=self.spin_moments_top.value())
+        self._hooks = hooks
+        self._populate_moments_table()
+        if hooks:
+            self._ai_plan = hooks_to_director_plan(
+                hooks,
+                source_duration_seconds=(
+                    self.media.duration_s if self.media is not None else None
+                ),
+            )
+            self._refresh_ai_table()
+            self.btn_ai_render.setEnabled(True)
+        self.statusBar().showMessage(
+            f"Found {len(hooks)} viral moment(s) — review in Top Moments / AI panel.",
+            10000,
+        )
+
+    def _populate_moments_table(self) -> None:
+        self.moments_table.setRowCount(0)
+        for row, hook in enumerate(self._hooks):
+            self.moments_table.insertRow(row)
+            box = QTableWidgetItem()
+            box.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+            box.setCheckState(Qt.CheckState.Checked)  # proposed accept
+            self.moments_table.setItem(row, 0, box)
+            for col, text in enumerate(
+                (
+                    f"{hook.start:.2f}",
+                    f"{hook.end:.2f}",
+                    hook.hook_type,
+                    f"{hook.score:.2f}",
+                    hook.transcript_snippet[:80],
+                ),
+                start=1,
+            ):
+                cell = QTableWidgetItem(text)
+                cell.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                self.moments_table.setItem(row, col, cell)
+
+    def _moments_acceptance(self) -> list[bool]:
+        result = []
+        for row in range(self.moments_table.rowCount()):
+            item = self.moments_table.item(row, 0)
+            result.append(
+                item is not None and item.checkState() == Qt.CheckState.Checked
+            )
+        return result
+
+    def _is_hook_plan(self) -> bool:
+        from openclip.ai import AIDirectorPlan
+
+        return (
+            isinstance(self._ai_plan, AIDirectorPlan)
+            and self._ai_plan.provider == "hook_detection"
+        )
+
     def _refresh_reframe_preview(self, checked: bool) -> None:
         if not checked or self.media is None:
             self.reframe_preview.clear()
@@ -453,6 +557,7 @@ class MainWindow(QMainWindow):
             self.btn_ai_plan,
             self.btn_load_transcript,
             self.btn_apply_transcript,
+            self.btn_find_moments,
         ):
             btn.setEnabled(True)
         if self.project.script.lines:
@@ -786,9 +891,11 @@ class MainWindow(QMainWindow):
 
         plan = self._ai_plan
         items = plan_to_review_items(plan)  # type: ignore[arg-type]
-        accepted_ids = {
-            item.id for item, ok in zip(items, self._ai_acceptance(), strict=True) if ok
-        }
+        if self._is_hook_plan() and len(self._hooks) == self.moments_table.rowCount():
+            acceptance = self._moments_acceptance()  # Top Moments checkboxes drive hook clips
+        else:
+            acceptance = self._ai_acceptance()
+        accepted_ids = {item.id for item, ok in zip(items, acceptance, strict=True) if ok}
         decisions = ai_plan_to_director_decisions(plan)  # type: ignore[arg-type]
         for decision in decisions:
             decision.status = "accepted" if decision.id in accepted_ids else "rejected"

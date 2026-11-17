@@ -32,6 +32,13 @@ from openclip.ai.errors import (
     ProviderConfigError,
     ProviderNotAvailableError,
 )
+from openclip.ai.hook_detection import (
+    HOOK_TYPES,
+    Hook,
+    HookDetector,
+    HookType,
+    hooks_to_director_plan,
+)
 from openclip.ai.mock import MockAIProvider
 from openclip.ai.pipeline import extract_json_object, generate_plan
 from openclip.ai.prompts import build_director_system_prompt, build_director_user_prompt
@@ -72,6 +79,7 @@ __all__ = [
     "AI_PLAN_SCHEMA_VERSION",
     "DEFAULT_TARGET_ASPECT",
     "DEFAULT_ZOOM_STRENGTH",
+    "HOOK_TYPES",
     "PROVIDER_NAMES",
     "STYLE_TEMPLATES",
     "AIAudioEnhancement",
@@ -92,6 +100,9 @@ __all__ = [
     "CaptionBlock",
     "CaptionStyle",
     "ExportConfigArgs",
+    "Hook",
+    "HookDetector",
+    "HookType",
     "MockAIProvider",
     "OpenAICompatibleClient",
     "ProviderConfig",
@@ -119,6 +130,7 @@ __all__ = [
     "generate_plan",
     "get_caption_style",
     "hex_to_ffmpeg_color",
+    "hooks_to_director_plan",
     "load_provider_config",
     "mock_tracking_data",
     "normalize_ai_plan",

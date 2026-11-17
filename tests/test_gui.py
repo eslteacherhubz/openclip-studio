@@ -343,3 +343,57 @@ def test_beauty_checkbox_disabled_without_vision(
     assert not win.chk_beauty.isEnabled()
     assert "Requires numpy + opencv (vision extra)" in win.chk_beauty.toolTip()
     win.close()
+
+
+def test_find_viral_moments_populates_top_moments_table(window) -> None:
+    import json as _json
+
+    from PySide6.QtCore import Qt
+
+    from openclip.ai import plan_to_review_items
+
+    window._original_transcript = _json.loads(
+        _json.dumps(
+            {
+                "segments": [
+                    {
+                        "text": "What is the most important question? Why does it matter?",
+                        "start": 0.0,
+                        "end": 18.0,
+                    },
+                    {
+                        "text": "This is unbelievable! A secret nobody tells you!",
+                        "start": 120.0,
+                        "end": 138.0,
+                    },
+                    {
+                        "text": "Make money with this free viral hack for success!",
+                        "start": 240.0,
+                        "end": 258.0,
+                    },
+                ]
+            }
+        )
+    )
+    window.spin_moments_top.setValue(3)
+    assert hasattr(window, "btn_find_moments")
+    assert hasattr(window, "moments_table")
+
+    window.find_viral_moments()
+
+    assert window.moments_table.rowCount() == 3
+    types = {window.moments_table.item(r, 3).text() for r in range(3)}
+    assert types == {"question", "shock", "keyword_dense"}
+    for r in range(3):
+        box = window.moments_table.item(r, 0)
+        assert box is not None and box.checkState() == Qt.CheckState.Checked
+        score = float(window.moments_table.item(r, 4).text())  # type: ignore[union-attr]
+        assert 0.0 < score <= 1.0
+
+    # accepted hooks feed the AI Director plan as review-gated clip proposals
+    assert window._ai_plan is not None
+    items = plan_to_review_items(window._ai_plan)  # type: ignore[arg-type]
+    assert len(items) == 3
+    assert {item.kind for item in items} == {"clip"}
+    assert all(item.status.value == "pending" for item in items)
+    assert window._moments_acceptance() == [True, True, True]
