@@ -30,7 +30,7 @@ from openclip.ai.smoothing import DEFAULT_SMOOTH_ALPHA, EWMA
 
 try:
     import cv2
-    import mediapipe as _mp  # type: ignore[import-untyped]
+    import mediapipe as _mp
     import numpy as np
 
     _HAS_MEDIAPIPE = True

@@ -79,5 +79,5 @@ files = ["src/openclip"]
 mypy_path = "src"
 
 [[tool.mypy.overrides]]
-module = ["faster_whisper.*", "imageio_ffmpeg.*"]
+module = ["faster_whisper.*", "imageio_ffmpeg.*", "mediapipe.*"]
 ignore_missing_imports = true
