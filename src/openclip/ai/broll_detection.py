@@ -10,13 +10,16 @@ that overlaps with Face-First hook windows.
 
 from __future__ import annotations
 
+import logging
 import re
-from dataclasses import dataclass
-from typing import Literal
+import tempfile
+from pathlib import Path
 
+from openclip.ai.broll_types import BrollOpportunity, BrollSource, ReasonType
+from openclip.ai.edl import AI_PLAN_SCHEMA_VERSION, AIBRoll, AIDirectorPlan, AISpan
 from openclip.ai.transcript_editing import TranscriptSegment
 
-ReasonType = Literal["visual_language", "concept_intro", "topic_shift"]
+logger = logging.getLogger(__name__)
 
 VISUAL_LANGUAGE_KEYWORDS: tuple[str, ...] = (
     "imagine",
@@ -92,33 +95,6 @@ def _noun_ratio(text: str) -> float:
         if is_capitalized or has_noun_suffix:
             noun_indicators += 1
     return noun_indicators / len(lower_words)
-
-
-@dataclass(frozen=True)
-class BrollOpportunity:
-    """One proposed B-roll insertion window on the source timeline."""
-
-    start: float
-    end: float
-    concept_query: str
-    keywords: tuple[str, ...]
-    priority: float  # 0.0 - 1.0
-    reason: ReasonType
-
-    @property
-    def duration(self) -> float:
-        return self.end - self.start
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "start": round(self.start, 3),
-            "end": round(self.end, 3),
-            "duration": round(self.duration, 3),
-            "concept_query": self.concept_query,
-            "keywords": list(self.keywords),
-            "priority": round(self.priority, 4),
-            "reason": self.reason,
-        }
 
 
 class BrollDetector:
@@ -358,9 +334,174 @@ class BrollDetector:
         return opportunities
 
 
+# ---------------------------------------------------------------------------
+# Bridge to AI Director plan
+# ---------------------------------------------------------------------------
+
+
+def broll_to_director_plan(
+    opportunities: list[BrollOpportunity],
+    sources: list[BrollSource],
+    source_duration_seconds: float | None,
+) -> AIDirectorPlan:
+    """Convert detected B-roll opportunities + resolved sources into an AI Director plan.
+
+    Each opportunity is paired with its corresponding source (by index) and becomes
+    an AIBRoll entry in the plan. The plan can then flow through the existing
+    review/render pipeline via `ai_plan_to_director_decisions`.
+    """
+    broll_items: list[AIBRoll] = []
+    for index, (opp, src) in enumerate(zip(opportunities, sources, strict=True)):
+        broll_items.append(
+            AIBRoll(
+                span=AISpan(start_seconds=opp.start, end_seconds=opp.end),
+                id=f"broll-{index:03d}",
+                query=opp.concept_query,
+                source=src.match_type,
+                mode="overlay",
+                extra={
+                    "asset": src.path,
+                    "confidence": src.confidence,
+                    "reason": opp.reason,
+                    "keywords": list(opp.keywords),
+                },
+            )
+        )
+    return AIDirectorPlan(
+        version=AI_PLAN_SCHEMA_VERSION,
+        provider="broll_detection",
+        prompt="Rule-based B-roll opportunity detection with local library sourcing",
+        source_duration_seconds=source_duration_seconds,
+        broll=broll_items,
+        notes=[f"{len(broll_items)} B-roll opportunity(ies) detected"],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Generated card rendering (for "generated" match_type fallback)
+# ---------------------------------------------------------------------------
+
+
+def _render_generated_card(
+    concept_query: str,
+    duration: float,
+    target_width: int = 1920,
+    target_height: int = 1080,
+) -> str:
+    """Render a temporary generated B-roll card as a PNG image.
+
+    Creates a dark gradient background with the concept query text centered.
+    Returns the path to the temporary file. The caller is responsible for
+    cleaning up the temp file after rendering completes.
+    """
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        logger.warning("cv2/numpy not available; cannot render generated B-roll card")
+        # Return a placeholder that will fail gracefully in FFmpeg
+        return f"generated:broll/{concept_query[:40]}.png"
+
+    # Create image with dark gradient background
+    img = np.zeros((target_height, target_width, 3), dtype=np.uint8)
+
+    # Dark gradient: from dark gray to black
+    for y in range(target_height):
+        ratio = y / target_height
+        # Interpolate between dark gray (40,40,40) and black (0,0,0)
+        val = int(40 * (1.0 - ratio * 0.5))
+        img[y, :] = (val, val, val)
+
+    # Add subtle grid pattern for visual interest
+    grid_color = (30, 30, 30)
+    for x in range(0, target_width, 80):
+        cv2.line(img, (x, 0), (x, target_height), grid_color, 1)
+    for y in range(0, target_height, 80):
+        cv2.line(img, (0, y), (target_width, y), grid_color, 1)
+
+    # Render concept query text centered
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = min(target_width, target_height) / 800.0
+    thickness = max(2, int(font_scale * 3))
+    color = (255, 255, 255)  # white text
+
+    # Wrap text to multiple lines if needed
+    max_width = int(target_width * 0.85)
+    words = concept_query.split()
+    lines: list[str] = []
+    current_line: list[str] = []
+    for word in words:
+        test_line = " ".join([*current_line, word])
+        (text_width, _), _ = cv2.getTextSize(test_line, font, font_scale, thickness)
+        if text_width > max_width and current_line:
+            lines.append(" ".join(current_line))
+            current_line = [word]
+        else:
+            current_line.append(word)
+    if current_line:
+        lines.append(" ".join(current_line))
+
+    # Calculate total text height
+    line_height = int(40 * font_scale)
+    total_text_height = len(lines) * line_height
+    start_y = (target_height - total_text_height) // 2 + line_height
+
+    for i, line in enumerate(lines):
+        (text_width, _), _ = cv2.getTextSize(line, font, font_scale, thickness)
+        x = (target_width - text_width) // 2
+        y = start_y + i * line_height
+        # Draw text with subtle shadow for readability
+        cv2.putText(
+            img,
+            line,
+            (x + 2, y + 2),
+            font,
+            font_scale,
+            (0, 0, 0),
+            thickness + 1,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            img,
+            line,
+            (x, y),
+            font,
+            font_scale,
+            color,
+            thickness,
+            cv2.LINE_AA,
+        )
+
+    # Add "B-ROLL" label at bottom
+    label = "B-ROLL PLACEHOLDER"
+    label_scale = font_scale * 0.5
+    label_thickness = max(1, int(label_scale * 2))
+    (label_width, _), _ = cv2.getTextSize(label, font, label_scale, label_thickness)
+    cv2.putText(
+        img,
+        label,
+        ((target_width - label_width) // 2, target_height - 40),
+        font,
+        label_scale,
+        (128, 128, 128),
+        label_thickness,
+        cv2.LINE_AA,
+    )
+
+    # Save to temp file
+    safe_query = "".join(c if c.isalnum() else "_" for c in concept_query[:40])
+    temp_dir = Path(tempfile.gettempdir())
+    temp_path = temp_dir / f"openclip_broll_{safe_query}_{duration:.1f}s.png"
+    cv2.imwrite(str(temp_path), img)
+    logger.debug("Rendered generated B-roll card to %s", temp_path)
+    return str(temp_path)
+
+
 __all__ = [
     "VISUAL_LANGUAGE_KEYWORDS",
     "BrollDetector",
     "BrollOpportunity",
     "ReasonType",
+    "_render_generated_card",
+    "broll_to_director_plan",
 ]

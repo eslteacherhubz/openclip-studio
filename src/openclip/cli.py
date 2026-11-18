@@ -394,6 +394,102 @@ def _cmd_ai_clips(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_ai_broll(args: argparse.Namespace) -> int:
+    """Detect B-roll opportunities from a transcript → JSON proposals with asset sourcing."""
+    from openclip.ai.broll_detection import BrollDetector, broll_to_director_plan
+    from openclip.ai.broll_sourcing import BrollSourceResolver
+    from openclip.ai.transcript_editing import TranscriptSegment, parse_transcript
+    from openclip.engine.ffmpeg import probe
+
+    raw = Path(args.transcript).read_text(encoding="utf-8")
+    try:
+        data: object = json.loads(raw)
+    except ValueError:
+        data = raw  # plain text (no timestamps)
+    segments = parse_transcript(data)
+    blocks: list[TranscriptSegment] = [
+        TranscriptSegment(text=s.text, start_s=s.start_s, end_s=s.end_s)
+        for s in segments
+        if s.start_s is not None and s.end_s is not None
+    ]
+
+    media = probe(args.media)
+    detector = BrollDetector(blocks)
+
+    # Get hook windows to exclude (Face-First rule)
+    hook_windows: tuple[tuple[float, float], ...] = ()
+    if args.exclude_hooks:
+        hook_data = Path(args.exclude_hooks).read_text(encoding="utf-8")
+        import json as _json
+        hook_json = _json.loads(hook_data)
+        if "clips" in hook_json:
+            hook_windows = tuple((float(c["start"]), float(c["end"])) for c in hook_json["clips"])
+
+    opportunities = detector.find_opportunities(exclude_hooks=hook_windows)
+
+    # Resolve sources
+    library_path = Path(args.library) if args.library else None
+    resolver = BrollSourceResolver(library_path)
+    sources = [resolver.resolve(opp, library_path=library_path) for opp in opportunities]
+
+    # Build output payload
+    broll_items: list[dict[str, object]] = []
+    for index, (opp, src) in enumerate(zip(opportunities, sources, strict=True)):
+        broll_items.append({
+            **opp.to_dict(),
+            "source": src.to_dict(),
+            "id": f"broll-{index:03d}",
+        })
+
+    payload: dict[str, object] = {
+        "media": str(media.path),
+        "duration_s": media.duration_s,
+        "broll": broll_items,
+    }
+
+    # Generate AI Director plan if requested
+    if args.plan:
+        plan = broll_to_director_plan(opportunities, sources, media.duration_s)
+        payload["plan"] = plan.to_dict()
+
+    # Render if requested
+    if args.render:
+        from openclip.ai import ai_plan_to_director_decisions
+        from openclip.director.executor import render_edl
+        from openclip.director.models import EditDecisionList
+        from openclip.engine.render import RenderOptions
+
+        plan = broll_to_director_plan(opportunities, sources, media.duration_s)
+        decisions = ai_plan_to_director_decisions(plan)
+        for decision in decisions:
+            decision.status = "accepted"
+        edl = EditDecisionList(project_source=str(media.path), decisions=decisions)
+
+        from openclip.engine.project import Project
+        project = Project.create(source=media.path, script_text="")
+
+        out_path = Path(args.out) if args.out else Path("broll_output.mp4")
+        result = render_edl(
+            project,
+            media,
+            edl,
+            out_path,
+            RenderOptions(
+                burn_captions=False,
+                transcript_captions=args.captions,
+                caption_style=args.caption_style,
+            ),
+        )
+        payload["rendered"] = str(result.out)
+        print(f"Rendered B-roll output: {result.out}", file=sys.stderr)
+
+    text = json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True)
+    if args.out:
+        Path(args.out).write_text(text + "\n", encoding="utf-8")
+    print(text)
+    return 0
+
+
 def _cmd_gui(args: argparse.Namespace) -> int:
     try:
         from openclip.gui.app import main as gui_main
@@ -601,6 +697,38 @@ def build_parser() -> argparse.ArgumentParser:
         "--render-dir", default=None, help="directory for rendered clips (with --render)"
     )
     sp.set_defaults(func=_cmd_ai_clips)
+
+    sp = sub.add_parser(
+        "ai-broll",
+        help="detect B-roll opportunities from a transcript → JSON proposals with asset sourcing",
+    )
+    sp.add_argument("--media", required=True, help="input video file")
+    sp.add_argument(
+        "--transcript", required=True, help="timestamped transcript JSON (segments) or text"
+    )
+    sp.add_argument("--library", default=None, help="path to broll_library.json manifest")
+    sp.add_argument(
+        "--exclude-hooks",
+        default=None,
+        help="path to ai-clips JSON output to exclude hook windows (Face-First)",
+    )
+    sp.add_argument("-o", "--out", default=None, help="write the JSON proposals to this file")
+    sp.add_argument(
+        "--plan", action="store_true", help="include AI Director plan in output"
+    )
+    sp.add_argument(
+        "--render", action="store_true", help="render the video with accepted B-roll overlays"
+    )
+    sp.add_argument(
+        "--captions", action="store_true", help="with --render: burn transcript captions"
+    )
+    sp.add_argument(
+        "--caption-style",
+        default=None,
+        choices=["Classic", "Social", "Cinema", "Neon"],
+        help="caption style template (with --captions)",
+    )
+    sp.set_defaults(func=_cmd_ai_broll)
 
     sp = sub.add_parser("gui", help="launch the desktop app (needs the 'gui' extra)")
     sp.add_argument("argv", nargs="*", help="arguments passed to Qt")

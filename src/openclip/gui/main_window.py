@@ -33,6 +33,8 @@ from PySide6.QtWidgets import (
 )
 
 from openclip.ai.beauty import BeautyConfig, beauty_available
+from openclip.ai.broll_detection import BrollDetector, BrollOpportunity
+from openclip.ai.broll_sourcing import BrollSource, BrollSourceResolver
 from openclip.ai.hook_detection import Hook
 from openclip.ai.reframing import DEFAULT_TARGET_ASPECT, tracking_from_default_face_analysis
 from openclip.engine.captions import ANIMATIONS
@@ -84,6 +86,8 @@ class MainWindow(QMainWindow):
         self._original_transcript: object | None = None  # parsed transcript JSON/text
         self._transcript_decisions: list[object] = []  # Decision list from the diff
         self._hooks: list[Hook] = []  # detected viral moments (Top Moments table)
+        self._broll_opportunities: list[BrollOpportunity] = []  # detected B-roll opportunities
+        self._broll_sources: list[BrollSource] = []  # resolved B-roll sources
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -99,8 +103,9 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self._build_transcript_panel())
         splitter.addWidget(self._build_ai_panel())
         splitter.addWidget(self._build_moments_panel())
+        splitter.addWidget(self._build_broll_panel())
         splitter.addWidget(self._build_settings_panel())
-        splitter.setSizes([300, 320, 280, 300, 260, 240])
+        splitter.setSizes([280, 300, 260, 280, 240, 220, 220])
 
         root.addWidget(self._build_player_bar())
         self.setStatusBar(QStatusBar())
@@ -399,12 +404,128 @@ class MainWindow(QMainWindow):
             )
         return result
 
+    def _build_broll_panel(self) -> QWidget:
+        box = QGroupBox("B-roll Proposals")
+        layout = QVBoxLayout(box)
+        btn_row = QHBoxLayout()
+        self.btn_find_broll = QPushButton("Find B-roll")
+        btn_row.addWidget(self.btn_find_broll)
+        btn_row.addWidget(QLabel("Library:"))
+        self.edit_broll_library = QLineEdit()
+        self.edit_broll_library.setPlaceholderText("Optional: path to broll_library.json")
+        btn_row.addWidget(self.edit_broll_library, 1)
+        layout.addLayout(btn_row)
+        self.broll_table = QTableWidget(0, 5)
+        self.broll_table.setHorizontalHeaderLabels(
+            ["Accept?", "Start (s)", "End (s)", "Match Type", "Snippet"]
+        )
+        self.broll_table.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(self.broll_table)
+        note = QLabel(
+            "Rule-based B-roll detection with local library sourcing. "
+            "Accepted rows become B-roll proposals in the AI Director panel "
+            "and render via Accept && Render AI…"
+        )
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        self.btn_find_broll.clicked.connect(self.find_broll)
+        self.btn_find_broll.setEnabled(False)
+        return box
+
+    def find_broll(self) -> None:
+        """Run B-roll detection on the loaded transcript and show proposals."""
+        from openclip.ai import parse_transcript
+        from openclip.ai.broll_detection import broll_to_director_plan
+        from openclip.ai.transcript_editing import TranscriptSegment
+
+        data = self._original_transcript
+        if data is None:
+            text_blocks = [
+                b.strip() for b in self.transcript_edit.toPlainText().split("\n\n") if b.strip()
+            ]
+            data = {"segments": [{"text": b} for b in text_blocks]}
+        segments = parse_transcript(data)
+        timed_blocks: list[TranscriptSegment] = [
+            TranscriptSegment(text=s.text, start_s=s.start_s, end_s=s.end_s)
+            for s in segments
+            if s.start_s is not None and s.end_s is not None
+        ]
+
+        detector = BrollDetector(timed_blocks)
+        # Exclude hook windows (Face-First rule)
+        hook_windows = tuple((h.start, h.end) for h in self._hooks)
+        opportunities = detector.find_opportunities(exclude_hooks=hook_windows)
+
+        # Resolve sources
+        library_path = self.edit_broll_library.text().strip() or None
+        resolver = BrollSourceResolver(library_path)
+        sources = [resolver.resolve(opp, library_path=library_path) for opp in opportunities]
+
+        self._broll_opportunities = opportunities
+        self._broll_sources = sources
+        self._populate_broll_table()
+
+        if opportunities:
+            self._ai_plan = broll_to_director_plan(
+                opportunities,
+                sources,
+                source_duration_seconds=self.media.duration_s if self.media is not None else None,
+            )
+            self._refresh_ai_table()
+            self.btn_ai_render.setEnabled(True)
+
+        self.statusBar().showMessage(
+            f"Found {len(opportunities)} B-roll opportunity(ies) — "
+            "review in B-roll Proposals / AI panel.",
+            10000,
+        )
+
+    def _populate_broll_table(self) -> None:
+        self.broll_table.setRowCount(0)
+        for row, (opp, src) in enumerate(
+            zip(self._broll_opportunities, self._broll_sources, strict=True)
+        ):
+            self.broll_table.insertRow(row)
+            box = QTableWidgetItem()
+            box.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+            box.setCheckState(Qt.CheckState.Checked)  # proposed accept
+            self.broll_table.setItem(row, 0, box)
+            for col, text in enumerate(
+                (
+                    f"{opp.start:.2f}",
+                    f"{opp.end:.2f}",
+                    src.match_type,
+                    opp.concept_query[:80],
+                ),
+                start=1,
+            ):
+                cell = QTableWidgetItem(text)
+                cell.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                self.broll_table.setItem(row, col, cell)
+
+    def _broll_acceptance(self) -> list[bool]:
+        result = []
+        for row in range(self.broll_table.rowCount()):
+            item = self.broll_table.item(row, 0)
+            result.append(
+                item is not None and item.checkState() == Qt.CheckState.Checked
+            )
+        return result
+
     def _is_hook_plan(self) -> bool:
         from openclip.ai import AIDirectorPlan
 
         return (
             isinstance(self._ai_plan, AIDirectorPlan)
             and self._ai_plan.provider == "hook_detection"
+        )
+
+    def _is_broll_plan(self) -> bool:
+        from openclip.ai import AIDirectorPlan
+
+        return (
+            isinstance(self._ai_plan, AIDirectorPlan)
+            and self._ai_plan.provider == "broll_detection"
         )
 
     def _refresh_reframe_preview(self, checked: bool) -> None:
@@ -558,6 +679,7 @@ class MainWindow(QMainWindow):
             self.btn_load_transcript,
             self.btn_apply_transcript,
             self.btn_find_moments,
+            self.btn_find_broll,
         ):
             btn.setEnabled(True)
         if self.project.script.lines:
@@ -893,6 +1015,11 @@ class MainWindow(QMainWindow):
         items = plan_to_review_items(plan)  # type: ignore[arg-type]
         if self._is_hook_plan() and len(self._hooks) == self.moments_table.rowCount():
             acceptance = self._moments_acceptance()  # Top Moments checkboxes drive hook clips
+        elif (
+            self._is_broll_plan()
+            and len(self._broll_opportunities) == self.broll_table.rowCount()
+        ):
+            acceptance = self._broll_acceptance()  # B-roll Proposals checkboxes drive broll
         else:
             acceptance = self._ai_acceptance()
         accepted_ids = {item.id for item, ok in zip(items, acceptance, strict=True) if ok}

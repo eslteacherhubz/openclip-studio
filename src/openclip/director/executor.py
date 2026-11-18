@@ -23,6 +23,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from openclip.ai.beauty import beauty_available, beauty_prepass
+from openclip.ai.broll_detection import _render_generated_card
 from openclip.ai.face_analysis import CachedFaceAnalysis, default_provider
 from openclip.ai.render_primitives import (
     CaptionBlock,
@@ -279,18 +280,44 @@ def render_edl(
     # AI broll decisions: overlay the referenced asset during the mapped span,
     # scaled/padded to the target (post-export-config) resolution.
     # Missing/invalid assets are dropped with a warning, never crash the render.
+    # For "generated:broll/" assets, render a temporary placeholder card.
     broll_overlays: list[BrollOverlay] = []
+    generated_temp_files: list[Path] = []
     prev_label = "base0"
     for index, d in enumerate(
         d for d in accepted if d.kind == "broll" and d.source_span is not None
     ):
+        assert d.source_span is not None  # narrowed by generator filter
         asset_raw = d.params.get("asset")
-        asset_path = (
-            Path(str(asset_raw)) if isinstance(asset_raw, str) and asset_raw.strip() else None
-        )
-        if asset_path is None or not asset_path.exists():
-            logger.warning("Skipping broll decision %s: asset %r is missing", d.id, asset_raw)
+        if not isinstance(asset_raw, str) or not asset_raw.strip():
+            logger.warning("Skipping broll decision %s: no asset path in params", d.id)
             continue
+
+        # Handle generated card fallback
+        asset_path: Path | None = None
+        if asset_raw.startswith("generated:broll/"):
+            # Extract concept query and duration from the placeholder path
+            # Format: generated:broll/{safe_query}_{start}-{end}.mp4 or .png
+            concept_query = str(d.params.get("query") or d.rationale or "B-roll")
+            duration = d.source_span[1] - d.source_span[0]
+            temp_path = _render_generated_card(
+                concept_query=concept_query,
+                duration=duration,
+                target_width=target_res[0],
+                target_height=target_res[1],
+            )
+            if temp_path and not temp_path.startswith("generated:broll/"):
+                asset_path = Path(temp_path)
+                generated_temp_files.append(asset_path)
+            else:
+                logger.warning("Failed to render generated B-roll card for %s", d.id)
+                continue
+        else:
+            asset_path = Path(asset_raw)
+            if not asset_path.exists():
+                logger.warning("Skipping broll decision %s: asset %r is missing", d.id, asset_raw)
+                continue
+
         span = d.source_span
         if span is None:
             continue
@@ -400,6 +427,10 @@ def render_edl(
         if intermediate_path is not None:
             with contextlib.suppress(OSError):
                 intermediate_path.unlink(missing_ok=True)
+        # Clean up generated B-roll temp files
+        for temp_file in generated_temp_files:
+            with contextlib.suppress(OSError):
+                temp_file.unlink(missing_ok=True)
 
 
 def kept_intervals_from_spans(

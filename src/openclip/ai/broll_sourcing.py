@@ -12,29 +12,10 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
-from openclip.ai.broll_detection import BrollOpportunity
+from openclip.ai.broll_types import BrollOpportunity, BrollSource, MatchType
 
 logger = logging.getLogger(__name__)
-
-MatchType = Literal["local", "generated"]
-
-
-@dataclass(frozen=True)
-class BrollSource:
-    """Resolved B-roll asset source."""
-
-    match_type: MatchType
-    path: str
-    confidence: float  # 0.0 - 1.0
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "match_type": self.match_type,
-            "path": self.path,
-            "confidence": round(self.confidence, 4),
-        }
 
 
 @dataclass
