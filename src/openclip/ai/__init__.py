@@ -7,6 +7,8 @@ security rules.
 
 from __future__ import annotations
 
+from openclip.ai.broll_detection import BrollDetector, BrollOpportunity, ReasonType
+from openclip.ai.broll_sourcing import BrollSource, BrollSourceResolver, MatchType
 from openclip.ai.clients import AnthropicClient, OpenAICompatibleClient
 from openclip.ai.config import PROVIDER_NAMES, ProviderConfig, ProviderName, load_provider_config
 from openclip.ai.director_bridge import ai_plan_to_director_decisions
@@ -97,18 +99,24 @@ __all__ = [
     "AISpan",
     "AIZoom",
     "AnthropicClient",
+    "BrollDetector",
+    "BrollOpportunity",
+    "BrollSource",
+    "BrollSourceResolver",
     "CaptionBlock",
     "CaptionStyle",
     "ExportConfigArgs",
     "Hook",
     "HookDetector",
     "HookType",
+    "MatchType",
     "MockAIProvider",
     "OpenAICompatibleClient",
     "ProviderConfig",
     "ProviderConfigError",
     "ProviderName",
     "ProviderNotAvailableError",
+    "ReasonType",
     "ReviewStatus",
     "TrackingPoint",
     "TranscriptSegment",
