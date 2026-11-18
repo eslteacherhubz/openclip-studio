@@ -256,6 +256,22 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.reframe_preview)
         self.chk_auto_reframe.toggled.connect(self._refresh_reframe_preview)
 
+        # Platform export preset
+        platform_row = QHBoxLayout()
+        self.cmb_platform = QComboBox()
+        self.cmb_platform.addItem("Custom / Source")
+        from openclip.ai.platform_presets import list_presets
+        for preset in list_presets():
+            label = f"{preset.name} ({preset.target_width}x{preset.target_height} {preset.aspect})"
+            self.cmb_platform.addItem(label, preset.name)
+        platform_row.addWidget(QLabel("Platform:"))
+        platform_row.addWidget(self.cmb_platform, 1)
+        layout.addLayout(platform_row)
+        self.lbl_platform_info = QLabel("")
+        self.lbl_platform_info.setWordWrap(True)
+        layout.addWidget(self.lbl_platform_info)
+        self.cmb_platform.currentIndexChanged.connect(self._update_platform_info)
+
         self.preview = VideoPreviewWidget()
         layout.addWidget(self.preview)
 
@@ -541,6 +557,39 @@ class MainWindow(QMainWindow):
             src_height=self.media.height,
             target_aspect_ratio=DEFAULT_TARGET_ASPECT,
         )
+
+    def _update_platform_info(self) -> None:
+        """Update the platform info label when selection changes."""
+        platform_idx = self.cmb_platform.currentIndex()
+        if platform_idx == 0:
+            self.lbl_platform_info.setText(
+                "Using source dimensions; no platform-specific constraints."
+            )
+            return
+        platform_name = self.cmb_platform.itemData(platform_idx)
+        from openclip.ai.platform_presets import get_preset
+        preset = get_preset(platform_name)
+        parts = [
+            f"Target: {preset.target_width}x{preset.target_height} ({preset.aspect})",
+            f"Loudness: {preset.loudness_lufs:.1f} LUFS",
+        ]
+        if preset.max_duration_s is not None:
+            parts.append(f"Max duration: {preset.max_duration_s:.0f}s")
+            if self.media is not None and self.media.duration_s > preset.max_duration_s:
+                parts.append(
+                    f"⚠ Source is {self.media.duration_s:.1f}s — exceeds {preset.name} limit!"
+                )
+            elif (
+                self.media is not None
+                and preset.duration_warning_threshold_s is not None
+                and self.media.duration_s > preset.duration_warning_threshold_s
+            ):
+                parts.append(
+                    f"⚠ Source is {self.media.duration_s:.1f}s — approaching {preset.name} limit"
+                )
+        if preset.vertical:
+            parts.append("Smart reframe: ENABLED (subject-tracking crop)")
+        self.lbl_platform_info.setText(" | ".join(parts))
 
     def _on_beauty_toggled(self, checked: bool) -> None:
         enabled = checked and beauty_available()
@@ -1041,6 +1090,13 @@ class MainWindow(QMainWindow):
                 jaw_slim=self.slider_beauty_jaw.value() / 100.0,
                 neck_tighten=self.slider_beauty_neck.value() / 100.0,
             )
+        # Get platform preset from combobox
+        platform = None
+        platform_idx = self.cmb_platform.currentIndex()
+        if platform_idx > 0:  # 0 is "Custom / Source"
+            platform_name = self.cmb_platform.itemData(platform_idx)
+            from openclip.ai.platform_presets import get_preset
+            platform = get_preset(platform_name)
         worker = AIRenderWorker(
             AIRenderRequest(
                 project=project,
@@ -1053,6 +1109,7 @@ class MainWindow(QMainWindow):
                 caption_style=self.cmb_caption_style.currentText() or None,
                 smart_reframe=self.chk_auto_reframe.isChecked(),
                 beauty=beauty,
+                platform=platform,
             )
         )
         worker.progress.connect(self._on_render_progress)

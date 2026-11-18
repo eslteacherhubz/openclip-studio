@@ -179,6 +179,7 @@ def _cmd_ai_edit(args: argparse.Namespace) -> int:
         load_provider_config,
         plan_to_review_items,
     )
+    from openclip.ai.platform_presets import get_preset
     from openclip.director.executor import render_edl
     from openclip.director.models import EditDecisionList
     from openclip.engine.ffmpeg import probe
@@ -226,25 +227,49 @@ def _cmd_ai_edit(args: argparse.Namespace) -> int:
             jaw_slim=args.beauty_jaw,
             neck_tighten=args.beauty_neck,
         )
-    result = render_edl(
-        project,
-        media,
-        edl,
-        args.out,
-        RenderOptions(
-            burn_captions=False,
-            transcript_captions=args.captions,
-            caption_style=args.caption_style,
-            smart_reframe=args.auto_reframe,
-            beauty=beauty,
-        ),
-    )
-    print(
-        f"Exported: {result.out}\n"
-        f"  provider={plan.provider}, decisions={len(decisions)} (all auto-accepted), "
-        f"cuts={result.cuts_applied}, kept {result.kept_duration_s:.2f}s "
-        f"of {media.duration_s:.2f}s"
-    )
+
+    # Handle platform preset(s)
+    platforms = [p.strip() for p in args.platform.split(",")] if args.platform else [None]
+    out_base = Path(args.out)
+    results = []
+    for platform_name in platforms:
+        platform = get_preset(platform_name) if platform_name else None
+        out_path = out_base
+        if platform:
+            out_path = out_base.with_name(f"{out_base.stem}_{platform.name}{out_base.suffix}")
+        result = render_edl(
+            project,
+            media,
+            edl,
+            out_path,
+            RenderOptions(
+                burn_captions=False,
+                transcript_captions=args.captions,
+                caption_style=args.caption_style,
+                smart_reframe=args.auto_reframe,
+                beauty=beauty,
+                platform=platform,
+            ),
+        )
+        results.append((platform_name or "source", result))
+
+    # Print summary
+    if len(results) == 1:
+        print(
+            f"Exported: {results[0][1].out}\n"
+            f"  provider={plan.provider}, decisions={len(decisions)} (all auto-accepted), "
+            f"cuts={results[0][1].cuts_applied}, kept {results[0][1].kept_duration_s:.2f}s "
+            f"of {media.duration_s:.2f}s"
+        )
+    else:
+        lines = [f"Exported {len(results)} platform variant(s):"]
+        for name, res in results:
+            lines.append(f"  {name}: {res.out}")
+            lines.append(
+                f"    cuts={res.cuts_applied}, "
+                f"kept {res.kept_duration_s:.2f}s of {media.duration_s:.2f}s"
+            )
+        print("\n".join(lines))
     return 0
 
 
@@ -658,6 +683,17 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.10,
         help="neck tighten intensity [0,1] (default: %(default)s)",
+    )
+    sp.add_argument(
+        "--platform",
+        default=None,
+        help=(
+            "export platform preset (tiktok, reels, shorts, youtube, "
+            "instagram, linkedin, twitter). "
+            "Comma-separated for multi-export (e.g., 'tiktok,youtube'). "
+            "Sets dimensions, aspect ratio, duration limits, and enables "
+            "smart reframe for vertical."
+        ),
     )
     sp.set_defaults(func=_cmd_ai_edit)
 

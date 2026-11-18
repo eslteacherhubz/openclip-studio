@@ -43,6 +43,12 @@ from openclip.ai.hook_detection import (
 )
 from openclip.ai.mock import MockAIProvider
 from openclip.ai.pipeline import extract_json_object, generate_plan
+from openclip.ai.platform_presets import (
+    PlatformPreset,
+    get_preset,
+    list_presets,
+    preset_names,
+)
 from openclip.ai.prompts import build_director_system_prompt, build_director_user_prompt
 from openclip.ai.providers import AIProvider, create_provider
 from openclip.ai.reframing import (
@@ -112,6 +118,7 @@ __all__ = [
     "MatchType",
     "MockAIProvider",
     "OpenAICompatibleClient",
+    "PlatformPreset",
     "ProviderConfig",
     "ProviderConfigError",
     "ProviderName",
@@ -137,8 +144,10 @@ __all__ = [
     "extract_json_object",
     "generate_plan",
     "get_caption_style",
+    "get_preset",
     "hex_to_ffmpeg_color",
     "hooks_to_director_plan",
+    "list_presets",
     "load_provider_config",
     "mock_tracking_data",
     "normalize_ai_plan",
@@ -146,6 +155,7 @@ __all__ = [
     "parse_ai_plan_json",
     "parse_transcript",
     "plan_to_review_items",
+    "preset_names",
     "to_ffmpeg_color",
     "transcript_to_edits",
 ]

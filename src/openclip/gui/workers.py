@@ -8,6 +8,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QThread, Signal
 
 from openclip.ai.beauty import BeautyConfig
+from openclip.ai.platform_presets import PlatformPreset
 from openclip.engine.ffmpeg import MediaInfo, probe
 from openclip.engine.pipeline import run_pipeline
 from openclip.engine.project import Project
@@ -80,6 +81,7 @@ class AIRenderRequest:
     caption_style: str | None = None  # STYLE_TEMPLATES name
     smart_reframe: bool = False  # subject-tracking 9:16 crop (mock tracking)
     beauty: BeautyConfig | None = None  # beauty/retouching pre-pass config (None → off)
+    platform: PlatformPreset | None = None
 
 
 class AIRenderWorker(QObject):
@@ -111,6 +113,7 @@ class AIRenderWorker(QObject):
                     caption_style=self._request.caption_style,
                     smart_reframe=self._request.smart_reframe,
                     beauty=self._request.beauty,
+                    platform=self._request.platform,
                 ),
                 progress=lambda stage, i, n: self.progress.emit(stage, i, n),
             )

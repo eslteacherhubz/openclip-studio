@@ -14,6 +14,7 @@ Caption event times are mapped from the source timeline into the exported
 
 from __future__ import annotations
 
+import logging
 import shutil
 import tempfile
 from collections.abc import Callable, Sequence
@@ -25,6 +26,7 @@ if TYPE_CHECKING:
 from pathlib import Path
 
 from openclip.ai.beauty import BeautyConfig
+from openclip.ai.platform_presets import PlatformPreset
 from openclip.engine.align import Alignment, LineAlignment
 from openclip.engine.captions import build_ass
 from openclip.engine.cutplan import kept_intervals
@@ -39,6 +41,8 @@ from openclip.engine.project import Project
 
 ProgressFn = Callable[[str, int, int], None]
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass
 class RenderOptions:
@@ -52,6 +56,7 @@ class RenderOptions:
     smart_reframe: bool = False  # subject-tracking crop before the export scale
     tracking_data: Sequence[TrackingPoint] | None = None  # None → mock pan
     beauty: BeautyConfig | None = None  # beauty/retouching pre-pass config (None → off)
+    platform: PlatformPreset | None = None  # platform export preset (auto-sets dims/reframe)
 
 
 @dataclass
@@ -214,6 +219,63 @@ def render_export(
     if out.parent != Path("."):
         out.parent.mkdir(parents=True, exist_ok=True)
     kept_duration = sum(e - s for s, e in kept)
+
+    # Apply platform preset if specified
+    final_scale = final_scale  # may be overridden by platform
+    if opts.platform is not None:
+        preset = opts.platform
+        # Duration warning
+        if (
+            preset.max_duration_s is not None
+            and media.duration_s > preset.max_duration_s
+        ):
+            logger.warning(
+                "Source duration %.1fs exceeds %s max duration %.1fs — "
+                "output may be rejected by platform",
+                media.duration_s,
+                preset.name,
+                preset.max_duration_s,
+            )
+        elif (
+            preset.duration_warning_threshold_s is not None
+            and media.duration_s > preset.duration_warning_threshold_s
+        ):
+            logger.warning(
+                "Source duration %.1fs approaches %s max duration %.1fs",
+                media.duration_s,
+                preset.name,
+                preset.max_duration_s,
+            )
+
+        # Build final_scale from preset target dimensions
+        from openclip.ai.render_primitives import build_export_vf
+        final_scale = build_export_vf(
+            preset.target_width, preset.target_height, preset.vertical
+        )
+
+        # Vertical preset → enable smart reframe
+        if preset.vertical and not opts.smart_reframe:
+            opts.smart_reframe = True
+            # If no tracking data provided, try to get real tracking
+            if opts.tracking_data is None:
+                from openclip.ai.face_analysis import select_provider
+                from openclip.ai.reframing import tracking_from_face_analysis
+
+                provider = select_provider(prefer_real=True)
+                try:
+                    opts.tracking_data = tracking_from_face_analysis(
+                        provider,
+                        media.fps or 30.0,
+                        kept_duration,
+                        sample_fps=5.0,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Face tracking unavailable (%s) — falling back to mock tracking",
+                        exc,
+                    )
+                    from openclip.ai.reframing import mock_tracking_data
+                    opts.tracking_data = mock_tracking_data(kept_duration)
 
     workdir = Path(tempfile.mkdtemp(prefix="openclip-render-"))
     try:
