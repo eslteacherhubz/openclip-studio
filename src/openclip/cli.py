@@ -281,6 +281,14 @@ def _cmd_ai_edit(args: argparse.Namespace) -> int:
         out_path = out_base
         if platform:
             out_path = out_base.with_name(f"{out_base.stem}_{platform.name}{out_base.suffix}")
+        # Guard: refuse to overwrite the source recording
+        if out_path.resolve() == Path(media.path).resolve():
+            print(
+                "Error: Output path is the same as the source recording "
+                "— refusing to overwrite it.",
+                file=sys.stderr,
+            )
+            return 1
         result = render_edl(
             project,
             media,
@@ -364,6 +372,16 @@ def _cmd_ai_edit_transcript(args: argparse.Namespace) -> int:
         print(decisions_to_json(decisions))
         print(f"Would keep {len(kept)} interval(s), {kept_total:.2f}s", file=sys.stderr)
         return 0
+
+    # Guard: refuse to overwrite the source recording
+    out_path = Path(args.out)
+    if out_path.resolve() == Path(media.path).resolve():
+        print(
+            "Error: Output path is the same as the source recording "
+            "— refusing to overwrite it.",
+            file=sys.stderr,
+        )
+        return 1
 
     project = Project.create(source=media.path, script_text="")
     result = render_edl(project, media, edl, args.out, RenderOptions(burn_captions=False))

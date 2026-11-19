@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -336,3 +338,221 @@ class TestDoctorOutput:
         assert "gui:" in result.stdout
         assert "asr:" in result.stdout
         assert "gaze:" in result.stdout
+
+
+class TestSourceOverwriteGuard:
+    """Regression tests for FIX 1: Source-overwrite guard."""
+
+    def test_render_export_raises_render_error_when_out_equals_source(self, tmp_path_factory):
+        """render_export raises RenderError when output path equals source path."""
+        from openclip.engine.render import RenderOptions, render_export
+
+        lesson = generate_lesson(tmp_path_factory.mktemp("lesson") / "lesson.mp4")
+        media = probe(lesson.path)
+
+        # Try to write to the same path as source
+        with pytest.raises(RenderError) as exc_info:
+            render_export(
+                media=media,
+                kept=[(0.0, media.duration_s)],
+                cut_spans=[],
+                ass_text=None,
+                audio_chain=None,
+                out_path=media.path,  # Same as source!
+                opts=RenderOptions(),
+            )
+        assert "same as the source" in str(exc_info.value)
+
+    def test_render_project_raises_render_error_when_out_equals_source(self, tmp_path_factory):
+        """render_project raises RenderError when output path equals source path."""
+        from openclip.engine.project import Project
+        from openclip.engine.render import RenderOptions, render_project
+
+        lesson = generate_lesson(tmp_path_factory.mktemp("lesson") / "lesson.mp4")
+        media = probe(lesson.path)
+        project = Project.create(source=media.path, script_text="")
+
+        with pytest.raises(RenderError) as exc_info:
+            render_project(
+                project=project,
+                media=media,
+                out_path=media.path,  # Same as source!
+                options=RenderOptions(),
+            )
+        assert "same as the source" in str(exc_info.value)
+
+    def test_ai_edit_cli_rejects_same_output_path(self, tmp_path_factory):
+        """ai-edit CLI rejects when output path equals source path."""
+        lesson = generate_lesson(tmp_path_factory.mktemp("lesson") / "lesson.mp4")
+        out = lesson.path  # Same as source!
+
+        result = subprocess.run([
+            sys.executable, "-m", "openclip.cli", "ai-edit",
+            "--media", str(lesson.path),
+            "--prompt", "test",
+            "--provider", "local_mock",
+            "--auto-accept",
+            "-o", str(out),
+        ], capture_output=True, text=True, cwd="/root/projects/openclip-studio")
+
+        assert result.returncode == 1
+        assert "same as the source" in result.stderr
+
+    def test_source_file_untouched_after_failed_overwrite(self, tmp_path_factory):
+        """Source file remains byte-identical after failed overwrite attempt."""
+        import hashlib
+
+        lesson = generate_lesson(tmp_path_factory.mktemp("lesson") / "lesson.mp4")
+        media = probe(lesson.path)
+
+        # Get hash of original source
+        original_hash = hashlib.sha256(lesson.path.read_bytes()).hexdigest()
+
+        # Try to overwrite
+        from openclip.engine.render import RenderOptions, render_export
+        with contextlib.suppress(RenderError):
+            render_export(
+                media=media,
+                kept=[(0.0, media.duration_s)],
+                cut_spans=[],
+                ass_text=None,
+                audio_chain=None,
+                out_path=media.path,
+                opts=RenderOptions(),
+            )
+
+        # Source should be unchanged
+        after_hash = hashlib.sha256(lesson.path.read_bytes()).hexdigest()
+        assert original_hash == after_hash, "Source file was modified!"
+
+
+class TestHonestCaptionReporting:
+    """Regression tests for FIX 2: Honest caption reporting."""
+
+    def test_build_export_ass_returns_none_when_no_captions(self, tmp_path_factory):
+        """build_export_ass returns None when no aligned lines have confidence > 0."""
+        from openclip.engine.project import Project
+        from openclip.engine.render import build_export_ass
+
+        lesson = generate_lesson(tmp_path_factory.mktemp("lesson") / "lesson.mp4")
+        media = probe(lesson.path)
+
+        # Project with no alignment (simulates even-mode without ASR)
+        project = Project.create(source=media.path, script_text="Hello :: Hola\n")
+
+        ass_text = build_export_ass(project, media, [])
+
+        assert ass_text is None
+
+    def test_render_export_captions_burned_false_when_no_ass(self, tmp_path_factory):
+        """render_export sets captions_burned=False when build_export_ass returns None."""
+        from openclip.engine.render import RenderOptions, render_export
+
+        lesson = generate_lesson(tmp_path_factory.mktemp("lesson") / "lesson.mp4")
+        media = probe(lesson.path)
+
+        out = tmp_path_factory.mktemp("out") / "out.mp4"
+        result = render_export(
+            media=media,
+            kept=[(0.0, media.duration_s)],
+            cut_spans=[],
+            ass_text=None,  # No captions available
+            audio_chain=None,
+            out_path=out,
+            opts=RenderOptions(burn_captions=True),
+        )
+
+        assert result.captions_burned is False
+
+
+class TestApostropheSafePaths:
+    """Regression tests for FIX 3: Apostrophe-safe concat + filter paths."""
+
+    def test_concat_succeeds_with_apostrophe_in_path(self, tmp_path_factory):
+        """_concat succeeds with apostrophe in temp dir path."""
+        from openclip.engine.render import _concat
+
+        # Create a temp dir with apostrophe in name
+        temp_base = tmp_path_factory.mktemp("O'Brien's Videos")
+        segments = [
+            temp_base / "seg_000.mp4",
+            temp_base / "seg_001.mp4",
+        ]
+        # Create valid segment files using ffmpeg
+        for seg in segments:
+            subprocess.run([
+                "ffmpeg", "-y", "-f", "lavfi", "-i",
+                "testsrc=duration=0.5:size=320x240:rate=30",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+                "-pix_fmt", "yuv420p", str(seg)
+            ], check=True, capture_output=True)
+
+        master = temp_base / "master.mp4"
+
+        # Should not raise
+        _concat(segments, master, has_audio=False)
+
+        assert master.exists()
+
+    def test_escape_filter_path_handles_apostrophe(self):
+        """escape_filter_path escapes apostrophes for ass= filter."""
+        from openclip.engine.ffmpeg import escape_filter_path
+
+        # Path with apostrophe
+        path = Path(r"C:\Users\O'Brien\video.mp4")
+        escaped = escape_filter_path(path)
+
+        # Should escape apostrophe as \'
+        assert "O\\'Brien" in escaped
+
+    def test_escape_concat_path_handles_apostrophe(self):
+        """_escape_concat_path produces valid concat demuxer entries."""
+        from openclip.engine.render import _escape_concat_path
+
+        path = "O'Brien's video.mp4"
+        escaped = _escape_concat_path(path)
+
+        # Should be valid concat demuxer syntax
+        # Expected: file 'O'\''Brien'\''s video.mp4'
+        assert escaped.startswith("file '")
+        assert escaped.endswith("'")
+        # The path should contain the apostrophe properly escaped
+        assert "O'\\''Brien'\\''s video.mp4" in escaped or "O'\\''Brien'\\''s" in escaped
+
+
+class TestAudioSampleRate:
+    """Regression tests for FIX 4: Pin audio sample rate to 48kHz."""
+
+    def test_final_pass_outputs_48khz_audio(self, tmp_path_factory):
+        """_final_pass outputs audio at 48kHz sample rate."""
+        from openclip.engine.ffmpeg import probe
+        from openclip.engine.render import _final_pass
+        from openclip.engine.synth import generate_lesson
+
+        lesson = generate_lesson(tmp_path_factory.mktemp("lesson") / "lesson.mp4")
+        media = probe(lesson.path)
+
+        master = tmp_path_factory.mktemp("master") / "master.mp4"
+        # Copy lesson to master for testing
+        import shutil
+        shutil.copy2(lesson.path, master)
+
+        out = tmp_path_factory.mktemp("out") / "out.mp4"
+
+        # Run final pass with an audio filter (simulating loudnorm)
+        _final_pass(
+            master=master,
+            out=out,
+            vf_graph=None,
+            af_chain="loudnorm",  # Simulate loudnorm chain
+            crf=20,
+            preset="veryfast",
+            has_audio=media.has_audio,
+        )
+
+        # Verify output audio sample rate is 48000
+        out_info = probe(out)
+        assert out_info.has_audio, "Output should have audio"
+        assert out_info.sample_rate == 48000, (
+            f"Expected 48000 Hz, got {out_info.sample_rate} Hz"
+        )

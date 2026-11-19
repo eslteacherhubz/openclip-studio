@@ -38,6 +38,7 @@ from openclip.engine.ffmpeg import (
     run_ffmpeg,
 )
 from openclip.engine.project import Project
+from openclip.hardening import RenderError
 
 ProgressFn = Callable[[str, int, int], None]
 
@@ -187,6 +188,15 @@ def build_export_ass(
 
     alignment = alignment_from_dict(project.alignment)
     mapped = map_alignment(alignment, cut_spans)
+
+    # FIX 2: If no lines have confidence > 0, return None and warn
+    if not any(ln.confidence > 0.0 for ln in mapped.lines):
+        logger.warning(
+            "No timed captions available (no ASR / even alignment). "
+            "Install the 'asr' extra for burned-in captions."
+        )
+        return None
+
     return build_ass(
         project.script.to_dict(),
         mapped,
@@ -221,6 +231,12 @@ def render_export(
     the output frame rate (`-r`) on the final pass.
     """
     out = Path(out_path)
+    # Guard: refuse to overwrite the source recording
+    if out.resolve() == Path(media.path).resolve():
+        raise RenderError(
+            "Output path is the same as the source recording — refusing to overwrite it. "
+            "Choose a different output path."
+        )
     if out.parent != Path("."):
         out.parent.mkdir(parents=True, exist_ok=True)
     kept_duration = sum(e - s for s, e in kept)
@@ -363,6 +379,13 @@ def render_project(
     progress: ProgressFn | None = None,
 ) -> RenderResult:
     """Render the project to an MP4 at `out_path`."""
+    out = Path(out_path)
+    # Guard: refuse to overwrite the source recording
+    if out.resolve() == Path(media.path).resolve():
+        raise RenderError(
+            "Output path is the same as the source recording — refusing to overwrite it. "
+            "Choose a different output path."
+        )
     opts = options or RenderOptions()
 
     cuts = project.cut_plan.accepted_cuts() if project.cut_plan else []
@@ -434,9 +457,21 @@ def _render_segments(
     return segs
 
 
+def _escape_concat_path(path: str) -> str:
+    """Escape a path for the ffmpeg concat demuxer (version 1.0).
+
+    The concat demuxer uses single quotes around paths. To include a single
+    quote in the path, we end the quoted string, add an escaped quote,
+    and restart: 'path'\''with'\''quotes'.
+    """
+    return "file '" + path.replace("'", "'\\''") + "'"
+
+
 def _concat(segments: list[Path], master: Path, has_audio: bool) -> None:
     listing = master.parent / "concat.txt"
-    listing.write_text("\n".join(f"file '{s!s}'" for s in segments), encoding="utf-8")
+    listing.write_text(
+        "\n".join(_escape_concat_path(str(s)) for s in segments), encoding="utf-8"
+    )
     run_ffmpeg(
         ["-y", "-f", "concat", "-safe", "0", "-i", str(listing), "-c", "copy", str(master)],
         timeout=600,
@@ -507,9 +542,10 @@ def _final_pass(
         args += ["-r", f"{out_fps:.6f}"]
     if has_audio:
         if af_chain:
-            args += ["-af", af_chain, "-c:a", "aac", "-b:a", "160k"]
+            args += ["-af", af_chain, "-c:a", "aac", "-b:a", "160k", "-ar", "48000"]
         else:
-            args += ["-c:a", "copy"]
+            # Even when copying, resample to 48kHz for consistent loudnorm output
+            args += ["-c:a", "aac", "-b:a", "160k", "-ar", "48000"]
     else:
         args += ["-an"]
     args += ["-movflags", "+faststart", str(out)]
