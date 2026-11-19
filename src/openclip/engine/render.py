@@ -57,6 +57,11 @@ class RenderOptions:
     tracking_data: Sequence[TrackingPoint] | None = None  # None → mock pan
     beauty: BeautyConfig | None = None  # beauty/retouching pre-pass config (None → off)
     platform: PlatformPreset | None = None  # platform export preset (auto-sets dims/reframe)
+    # Beauty pre-pass performance options
+    beauty_parallel: bool = False  # enable parallel frame processing
+    beauty_num_workers: int | None = None  # worker count for parallel
+    # processing (default: cpu_count)
+    beauty_use_gpu: bool = False  # enable GPU acceleration via OpenCV CUDA
 
 
 @dataclass

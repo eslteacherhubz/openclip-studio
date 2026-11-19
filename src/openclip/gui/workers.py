@@ -82,6 +82,9 @@ class AIRenderRequest:
     smart_reframe: bool = False  # subject-tracking 9:16 crop (mock tracking)
     beauty: BeautyConfig | None = None  # beauty/retouching pre-pass config (None → off)
     platform: PlatformPreset | None = None
+    beauty_parallel: bool = False
+    beauty_num_workers: int | None = None
+    beauty_use_gpu: bool = False
 
 
 class AIRenderWorker(QObject):
@@ -114,6 +117,9 @@ class AIRenderWorker(QObject):
                     smart_reframe=self._request.smart_reframe,
                     beauty=self._request.beauty,
                     platform=self._request.platform,
+                    beauty_parallel=self._request.beauty_parallel,
+                    beauty_num_workers=self._request.beauty_num_workers,
+                    beauty_use_gpu=self._request.beauty_use_gpu,
                 ),
                 progress=lambda stage, i, n: self.progress.emit(stage, i, n),
             )

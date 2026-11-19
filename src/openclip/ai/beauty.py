@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import subprocess
-from collections.abc import Sequence
+import threading
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+from openclip.ai.face_analysis import FaceFrame
 
 try:
     import cv2
@@ -16,7 +21,14 @@ except ImportError:  # pragma: no cover
     np = None  # type: ignore[assignment]
     _HAS_VISION = False
 
-from openclip.ai.face_analysis import CachedFaceAnalysis, FaceFrame, Rect
+from openclip.ai.face_analysis import CachedFaceAnalysis, Rect
+
+logger = logging.getLogger(__name__)
+
+
+class CancellationError(RuntimeError):
+    """Raised when beauty_prepass is cancelled by the user."""
+    pass
 
 
 @dataclass(frozen=True)
@@ -379,6 +391,205 @@ def spot_heal(
     return out
 
 
+def _precompute_face_frames(
+    source_path: str,
+    face_analysis: CachedFaceAnalysis,
+    fps: float,
+    total_frames: int,
+    cancel_flag: threading.Event | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> list[FaceFrame | None]:
+    """Pre-compute all FaceFrame results sequentially to populate the cache.
+
+    This ensures thread-safe cache population before parallel processing.
+    """
+    if not beauty_available():
+        raise RuntimeError("Vision dependencies (numpy, opencv) not available")
+
+    cap = cv2.VideoCapture(source_path)
+    if not cap.isOpened():
+        raise RuntimeError(f"Cannot open source video: {source_path}")
+
+    try:
+        face_frames: list[FaceFrame | None] = [None] * total_frames
+        for frame_index in range(total_frames):
+            if cancel_flag is not None and cancel_flag.is_set():
+                raise CancellationError("Beauty pre-pass cancelled by user")
+
+            ret, frame = cap.read()
+            if not ret:
+                # Fill remaining with None
+                for i in range(frame_index, total_frames):
+                    face_frames[i] = None
+                break
+
+            timestamp = frame_index / fps if fps > 0 else 0.0
+            face_frame = face_analysis.analyze_frame(
+                frame_index, timestamp, frame
+            )
+            face_frames[frame_index] = face_frame
+
+            if progress_callback is not None:
+                progress_callback(frame_index + 1, total_frames)
+        return face_frames
+    finally:
+        cap.release()
+
+
+def _process_frame_chunk(
+    chunk_args: tuple[int, list[np.ndarray], list[FaceFrame | None], BeautyConfig, int, int],
+) -> list[np.ndarray]:
+    """Process a chunk of frames in parallel.
+
+    Args:
+        chunk_args: (start_idx, frames, face_frames, config, width, height)
+
+    Returns:
+        List of processed frames in the same order.
+    """
+    _start_idx, frames, face_frames, config, _width, _height = chunk_args
+    results: list[np.ndarray] = []
+
+    for i, frame in enumerate(frames):
+        face_frame = face_frames[i]
+        if face_frame is None:
+            out = frame
+        else:
+            out = smooth_skin(frame, face_frame, intensity=config.skin_smooth)
+            out = micro_sculpt(
+                out,
+                face_frame,
+                jaw_slim=config.jaw_slim,
+                neck_tighten=config.neck_tighten,
+            )
+            out = spot_heal(out, face_frame, blemishes=config.blemishes)
+        results.append(out)
+
+    return results
+
+
+def _process_frame_chunk_gpu(
+    chunk_args: tuple[int, list[np.ndarray], list[FaceFrame | None], BeautyConfig, int, int],
+) -> list[np.ndarray]:
+    """Process a chunk of frames in parallel using GPU acceleration for smoothing.
+
+    Falls back to CPU if GPU processing fails.
+    """
+    _start_idx, frames, face_frames, config, _width, _height = chunk_args
+    results: list[np.ndarray] = []
+
+    # Check if CUDA is available
+    cuda_available = False
+    try:
+        cuda_available = cv2.cuda.getCudaEnabledDeviceCount() > 0
+    except Exception:
+        cuda_available = False
+
+    for i, frame in enumerate(frames):
+        face_frame = face_frames[i]
+        if face_frame is None:
+            out = frame
+        else:
+            # Apply GPU-accelerated smoothing if available
+            if cuda_available and config.skin_smooth > 0:
+                try:
+                    out = _smooth_skin_gpu(frame, face_frame, intensity=config.skin_smooth)
+                except Exception as e:
+                    logger.warning("GPU smoothing failed, falling back to CPU: %s", e)
+                    out = smooth_skin(frame, face_frame, intensity=config.skin_smooth)
+            else:
+                out = smooth_skin(frame, face_frame, intensity=config.skin_smooth)
+
+            out = micro_sculpt(
+                out,
+                face_frame,
+                jaw_slim=config.jaw_slim,
+                neck_tighten=config.neck_tighten,
+            )
+            out = spot_heal(out, face_frame, blemishes=config.blemishes)
+        results.append(out)
+
+    return results
+
+
+def _smooth_skin_gpu(
+    frame: np.ndarray,
+    face_frame: FaceFrame,
+    intensity: float = 0.15,
+) -> np.ndarray:
+    """Apply frequency-separation skin smoothing using OpenCV CUDA.
+
+    Falls back to CPU if any CUDA operation fails.
+    """
+    if not _HAS_VISION:
+        raise RuntimeError("Vision dependencies (numpy, opencv) not available")
+
+    if frame.size == 0:
+        return frame
+
+    intensity = max(0.0, min(1.0, intensity))
+    if intensity == 0.0:
+        return frame.copy()
+
+    h, w = frame.shape[:2]
+
+    # Rasterize mask (CPU operation)
+    mask = _rasterize_mask(face_frame.skin_mask_cells, h, w)
+    mask = _apply_exclusions(mask, face_frame.exclusion_zones, h, w)
+
+    # Upload to GPU
+    # Use 'object' type for CUDA objects since they may not be available in type stubs
+    gpu_frame: object = cv2.cuda_GpuMat()  # type: ignore[attr-defined]
+    gpu_frame.upload(frame)  # type: ignore[attr-defined]
+
+    gpu_mask: object = cv2.cuda_GpuMat()  # type: ignore[attr-defined]
+    gpu_mask.upload(mask.astype(np.float32))  # type: ignore[attr-defined]
+
+    frame_f = frame.astype(np.float32) / 255.0
+
+    base_ksize = int(5 + 16 * intensity)
+    if base_ksize % 2 == 0:
+        base_ksize += 1
+    base_sigma = 1.0 + 6.0 * intensity
+
+    # Extract low-frequency component on GPU
+    low_freq_gpu = cv2.cuda.createGaussianFilter(  # type: ignore[attr-defined]
+        cv2.CV_32FC3, cv2.CV_32FC3, (base_ksize, base_ksize), base_sigma
+    )
+    gpu_frame_f: object = cv2.cuda_GpuMat()  # type: ignore[attr-defined]
+    gpu_frame_f.upload(frame_f)  # type: ignore[attr-defined]
+    low_freq_gpu = low_freq_gpu.apply(gpu_frame_f)
+
+    # High-frequency detail = original - low_freq
+    high_freq = frame_f - low_freq_gpu.download()
+
+    # Smooth the low-frequency component more aggressively on GPU
+    smooth_ksize = int(base_ksize * 1.5)
+    if smooth_ksize % 2 == 0:
+        smooth_ksize += 1
+    smooth_sigma = base_sigma * 2.0
+
+    smooth_low_gpu = cv2.cuda.createGaussianFilter(  # type: ignore[attr-defined]
+        cv2.CV_32FC3, cv2.CV_32FC3, (smooth_ksize, smooth_ksize), smooth_sigma
+    )
+    smoothed_low_gpu = smooth_low_gpu.apply(low_freq_gpu)
+
+    # Reconstruct: smoothed low-freq + original high-freq
+    smoothed_low = smoothed_low_gpu.download()
+    result_f = smoothed_low + high_freq
+
+    # Blend with original using feathered mask and intensity
+    out = frame.copy()
+    for c in range(3):
+        orig_channel = frame[:, :, c]
+        result_channel = result_f[:, :, c] * 255.0
+        weight = intensity * mask
+        blended = orig_channel * (1.0 - weight) + result_channel * weight
+        out[:, :, c] = np.clip(blended, 0, 255).astype(np.uint8)
+
+    return out
+
+
 def beauty_prepass(
     source_path: str,
     output_path: str,
@@ -387,6 +598,11 @@ def beauty_prepass(
     fps: float,
     width: int,
     height: int,
+    parallel: bool = False,
+    num_workers: int | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
+    cancel_flag: threading.Event | None = None,
+    use_gpu: bool = False,
 ) -> None:
     """Decode ``source_path``, apply the beauty chain per-frame, re-encode to ``output_path``.
 
@@ -397,17 +613,152 @@ def beauty_prepass(
     high-quality H.264 rather than a lossy cv2 codec fallback; the source
     audio stream is muxed in unchanged.
 
+    Args:
+        source_path: Path to source video file.
+        output_path: Path to output video file.
+        config: BeautyConfig with intensity settings.
+        face_analysis: CachedFaceAnalysis instance for per-frame face data.
+        fps: Frames per second of the source video.
+        width: Source video width.
+        height: Source video height.
+        parallel: If True, use parallel processing for beauty filter application.
+        num_workers: Number of worker processes (default: cpu_count()).
+        progress_callback: Optional callback(current_frame, total_frames) for progress updates.
+        cancel_flag: Optional threading.Event to signal cancellation.
+        use_gpu: If True and CUDA available, use GPU acceleration for smoothing.
+
     Raises:
-        RuntimeError: If vision dependencies (numpy, opencv) are unavailable,
-            the source cannot be opened, or the FFmpeg encoder fails.
+        RuntimeError: If vision dependencies are unavailable, source cannot be opened,
+            or FFmpeg encoder fails.
+        CancellationError: If cancel_flag is set during processing.
     """
     if not beauty_available():
         raise RuntimeError("Vision dependencies (numpy, opencv) not available")
 
+    if num_workers is None:
+        import os
+        num_workers = os.cpu_count() or 1
+
+    # Open source to get frame count
     cap = cv2.VideoCapture(source_path)
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open source video: {source_path}")
 
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    if total_frames <= 0:
+        cap.release()
+        raise RuntimeError(f"Could not determine frame count for {source_path}")
+    cap.release()
+
+    # Pre-compute all FaceFrame results (populates cache sequentially)
+    if cancel_flag is not None and cancel_flag.is_set():
+        raise CancellationError("Beauty pre-pass cancelled before start")
+
+    logger.info("Pre-computing face analysis for %d frames...", total_frames)
+
+    def precompute_progress_cb(current: int, total: int) -> None:
+        if progress_callback is not None:
+            progress_callback(current, total_frames)
+
+    face_frames = _precompute_face_frames(
+        source_path,
+        face_analysis,
+        fps,
+        total_frames,
+        cancel_flag=cancel_flag,
+        progress_callback=precompute_progress_cb,
+    )
+    logger.info("Face analysis pre-computation complete")
+
+    # Read all frames into memory for parallel processing
+    cap = cv2.VideoCapture(source_path)
+    if not cap.isOpened():
+        raise RuntimeError(f"Cannot open source video: {source_path}")
+
+    frames: list[np.ndarray] = []
+    try:
+        for _i in range(total_frames):
+            if cancel_flag is not None and cancel_flag.is_set():
+                raise CancellationError("Beauty pre-pass cancelled during frame read")
+            ret, frame = cap.read()
+            if not ret:
+                break
+            frames.append(frame)
+    finally:
+        cap.release()
+
+    if len(frames) != total_frames:
+        logger.warning("Read %d frames, expected %d", len(frames), total_frames)
+        total_frames = len(frames)
+        face_frames = face_frames[:total_frames]
+
+    # Process frames (parallel or sequential)
+    processed_frames: list[np.ndarray] = []
+
+    if parallel and total_frames > 1 and num_workers > 1:
+        logger.info("Processing %d frames with %d workers (parallel=%s, gpu=%s)",
+                    total_frames, num_workers, parallel, use_gpu)
+
+        chunk_size = max(1, (total_frames + num_workers - 1) // num_workers)
+        ChunkType = tuple[
+            int, list[np.ndarray], list[FaceFrame | None], BeautyConfig, int, int
+        ]
+        chunks: list[ChunkType] = []
+
+        for i in range(0, total_frames, chunk_size):
+            end = min(i + chunk_size, total_frames)
+            chunk_args = (
+                i,
+                frames[i:end],
+                face_frames[i:end],
+                config,
+                width,
+                height,
+            )
+            chunks.append(chunk_args)
+
+        if use_gpu:
+            # GPU processing - still use thread pool for I/O but GPU operations are serial-ish
+            # For true GPU parallelism we'd need multiple GPUs; here we use threads
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=num_workers) as thread_executor:
+                chunk_results = list(thread_executor.map(_process_frame_chunk_gpu, chunks))
+        else:
+            from concurrent.futures import ProcessPoolExecutor
+            with ProcessPoolExecutor(max_workers=num_workers) as proc_executor:
+                chunk_results = list(proc_executor.map(_process_frame_chunk, chunks))
+
+        # Flatten results in order
+        for chunk_result in chunk_results:
+            processed_frames.extend(chunk_result)
+
+        if progress_callback is not None:
+            progress_callback(total_frames, total_frames)
+    else:
+        logger.info("Processing %d frames sequentially", total_frames)
+        for i in range(total_frames):
+            if cancel_flag is not None and cancel_flag.is_set():
+                raise CancellationError("Beauty pre-pass cancelled during processing")
+
+            frame = frames[i]
+            face_frame = face_frames[i]
+            if face_frame is None:
+                out = frame
+            else:
+                out = smooth_skin(frame, face_frame, intensity=config.skin_smooth)
+                out = micro_sculpt(
+                    out,
+                    face_frame,
+                    jaw_slim=config.jaw_slim,
+                    neck_tighten=config.neck_tighten,
+                )
+                out = spot_heal(out, face_frame, blemishes=config.blemishes)
+            processed_frames.append(out)
+
+        if progress_callback is not None:
+            progress_callback(total_frames, total_frames)
+
+    # Write processed frames to FFmpeg
     ffmpeg_args = [
         "ffmpeg", "-y",
         "-nostats",
@@ -438,32 +789,13 @@ def beauty_prepass(
     assert proc.stdin is not None and proc.stderr is not None
 
     try:
-        frame_index = 0
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            timestamp = frame_index / fps if fps > 0 else 0.0
-            face_frame = face_analysis.analyze_frame(
-                frame_index, timestamp, frame
-            )
-            if face_frame is None:
-                out = frame
-            else:
-                out = smooth_skin(frame, face_frame, intensity=config.skin_smooth)
-                out = micro_sculpt(
-                    out,
-                    face_frame,
-                    jaw_slim=config.jaw_slim,
-                    neck_tighten=config.neck_tighten,
-                )
-                out = spot_heal(out, face_frame, blemishes=config.blemishes)
-            proc.stdin.write(np.ascontiguousarray(out).tobytes())
-            frame_index += 1
+        for frame in processed_frames:
+            if cancel_flag is not None and cancel_flag.is_set():
+                raise CancellationError("Beauty pre-pass cancelled during encoding")
+            proc.stdin.write(np.ascontiguousarray(frame).tobytes())
     except BrokenPipeError:
         pass
     finally:
-        cap.release()
         proc.stdin.close()
         returncode = proc.wait()
 

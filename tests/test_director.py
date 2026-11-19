@@ -402,6 +402,11 @@ class TestBeautyIntegration:
             fps: float,
             width: int,
             height: int,
+            parallel: bool = False,
+            num_workers: int | None = None,
+            progress_callback: object | None = None,
+            cancel_flag: object | None = None,
+            use_gpu: bool = False,
         ) -> None:
             calls.append((source_path, output_path, config, fps, width, height))
 

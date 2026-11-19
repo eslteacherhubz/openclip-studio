@@ -314,7 +314,39 @@ class MainWindow(QMainWindow):
         neck_row.addWidget(self.slider_beauty_neck, 1)
         layout.addLayout(neck_row)
 
+        # Beauty performance options
+        perf_row = QHBoxLayout()
+        self.chk_beauty_parallel = QCheckBox("Parallel Processing")
+        self.chk_beauty_parallel.setChecked(False)
+        self.chk_beauty_parallel.setEnabled(False)
+        self.chk_beauty_parallel.setToolTip(
+            "Use multi-process parallel frame processing for faster beauty pre-pass. "
+            "Requires vision extra (numpy, opencv)."
+        )
+        perf_row.addWidget(self.chk_beauty_parallel)
+        perf_row.addWidget(QLabel("Workers:"))
+        self.spin_beauty_workers = QSpinBox()
+        self.spin_beauty_workers.setRange(1, 64)
+        self.spin_beauty_workers.setValue(4)
+        self.spin_beauty_workers.setEnabled(False)
+        perf_row.addWidget(self.spin_beauty_workers)
+        perf_row.addStretch()
+        layout.addLayout(perf_row)
+
+        gpu_row = QHBoxLayout()
+        self.chk_beauty_gpu = QCheckBox("GPU Acceleration (CUDA)")
+        self.chk_beauty_gpu.setChecked(False)
+        self.chk_beauty_gpu.setEnabled(False)
+        self.chk_beauty_gpu.setToolTip(
+            "Use OpenCV CUDA for GPU-accelerated skin smoothing. "
+            "Falls back to CPU if CUDA not available."
+        )
+        gpu_row.addWidget(self.chk_beauty_gpu)
+        gpu_row.addStretch()
+        layout.addLayout(gpu_row)
+
         self.chk_beauty.toggled.connect(self._on_beauty_toggled)
+        self.chk_beauty_parallel.toggled.connect(self._on_beauty_parallel_toggled)
         note = QLabel(
             "Checked rows are accepted and rendered; unchecked rows are rejected. "
             "Provider defaults to local_mock (offline); pick a real provider and "
@@ -596,6 +628,13 @@ class MainWindow(QMainWindow):
         self.slider_beauty_skin.setEnabled(enabled)
         self.slider_beauty_jaw.setEnabled(enabled)
         self.slider_beauty_neck.setEnabled(enabled)
+        self.chk_beauty_parallel.setEnabled(enabled)
+        self.spin_beauty_workers.setEnabled(enabled and self.chk_beauty_parallel.isChecked())
+        self.chk_beauty_gpu.setEnabled(enabled)
+
+    def _on_beauty_parallel_toggled(self, checked: bool) -> None:
+        enabled = checked and self.chk_beauty.isChecked() and beauty_available()
+        self.spin_beauty_workers.setEnabled(enabled)
 
     def _build_settings_panel(self) -> QWidget:
         box = QGroupBox("Export settings")
@@ -1110,6 +1149,13 @@ class MainWindow(QMainWindow):
                 smart_reframe=self.chk_auto_reframe.isChecked(),
                 beauty=beauty,
                 platform=platform,
+                beauty_parallel=self.chk_beauty_parallel.isChecked(),
+                beauty_num_workers=(
+                    self.spin_beauty_workers.value()
+                    if self.chk_beauty_parallel.isChecked()
+                    else None
+                ),
+                beauty_use_gpu=self.chk_beauty_gpu.isChecked(),
             )
         )
         worker.progress.connect(self._on_render_progress)

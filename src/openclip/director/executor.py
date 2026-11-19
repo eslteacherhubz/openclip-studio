@@ -19,10 +19,11 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import threading
 from dataclasses import replace
 from pathlib import Path
 
-from openclip.ai.beauty import beauty_available, beauty_prepass
+from openclip.ai.beauty import CancellationError, beauty_available, beauty_prepass
 from openclip.ai.broll_detection import _render_generated_card
 from openclip.ai.face_analysis import CachedFaceAnalysis, default_provider
 from openclip.ai.render_primitives import (
@@ -391,20 +392,38 @@ def render_edl(
     # unavailable the existing path is used unchanged (byte-identical guarantee).
     source_media = media
     intermediate_path: Path | None = None
+    cancel_flag = threading.Event()  # can be set by external caller if needed
     if opts.beauty is not None and beauty_available():
         intermediate_path = Path(str(out_path)).with_name(
             Path(str(out_path)).stem + "_beauty_master.mp4"
         )
         cached_face_analysis = CachedFaceAnalysis(default_provider())
-        beauty_prepass(
-            str(media.path),
-            str(intermediate_path),
-            opts.beauty,
-            cached_face_analysis,
-            media.fps if media.fps > 0 else 25.0,
-            media.width or 1280,
-            media.height or 720,
-        )
+
+        def beauty_progress(current: int, total: int) -> None:
+            if progress is not None:
+                progress("beauty_prepass", current, total)
+
+        try:
+            beauty_prepass(
+                str(media.path),
+                str(intermediate_path),
+                opts.beauty,
+                cached_face_analysis,
+                media.fps if media.fps > 0 else 25.0,
+                media.width or 1280,
+                media.height or 720,
+                parallel=opts.beauty_parallel,
+                num_workers=opts.beauty_num_workers,
+                progress_callback=beauty_progress,
+                cancel_flag=cancel_flag,
+                use_gpu=opts.beauty_use_gpu,
+            )
+        except CancellationError:
+            logger.info("Beauty pre-pass cancelled by user")
+            if intermediate_path is not None:
+                with contextlib.suppress(OSError):
+                    intermediate_path.unlink(missing_ok=True)
+            raise
         source_media = replace(media, path=intermediate_path)
 
     try:
