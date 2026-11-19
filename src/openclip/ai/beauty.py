@@ -7,7 +7,6 @@ import subprocess
 import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 from openclip.ai.face_analysis import FaceFrame
 

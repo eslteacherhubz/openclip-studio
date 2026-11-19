@@ -110,6 +110,15 @@ class MainWindow(QMainWindow):
         root.addWidget(self._build_player_bar())
         self.setStatusBar(QStatusBar())
 
+        # Show hint if vision dependencies are missing
+        if not beauty_available():
+            self.statusBar().showMessage(
+                "Vision dependencies (numpy, opencv) not installed — "
+                "Beauty, Face Tracking, and GPU features unavailable. "
+                "Run 'openclip doctor' for install instructions.",
+                30000,
+            )
+
     # ---------- construction helpers ----------
 
     def _build_toolbar(self) -> QHBoxLayout:

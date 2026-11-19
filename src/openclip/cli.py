@@ -4,11 +4,54 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 from pathlib import Path
 from typing import Any
 
 from openclip import __version__
+from openclip.hardening import (
+    handle_errors,
+    validate_media,
+)
+
+
+def _cmd_doctor(args: argparse.Namespace) -> int:
+    """Check system dependencies and report status."""
+    import platform
+
+    from openclip.hardening import get_missing_dependencies
+
+    print("OpenClip System Check")
+    print("=" * 50)
+    print(f"Python: {platform.python_version()} ({platform.python_implementation()})")
+    print(f"Platform: {platform.system()} {platform.release()}")
+    print(f"Architecture: {platform.machine()}")
+    print()
+
+    # Check ffmpeg/ffprobe
+    ffmpeg = shutil.which("ffmpeg")
+    ffprobe = shutil.which("ffprobe")
+    print("Core Dependencies:")
+    print(f"  ffmpeg:  {'✅ ' + ffmpeg if ffmpeg else '❌ NOT FOUND'}")
+    print(f"  ffprobe: {'✅ ' + ffprobe if ffprobe else '❌ NOT FOUND'}")
+    print()
+
+    # Check optional extras
+    deps = get_missing_dependencies()
+    print("Optional Extras:")
+    for extra, status in deps.items():
+        print(f"  {extra}: {status}")
+    print()
+
+    # Overall status
+    all_ok = ffmpeg and ffprobe and all("✅" in s for s in deps.values())
+    if all_ok:
+        print("✅ All checks passed — ready to use!")
+        return 0
+    else:
+        print("⚠ Some dependencies missing — see above for install commands")
+        return 1
 
 
 def _cmd_probe(args: argparse.Namespace) -> int:
@@ -186,6 +229,7 @@ def _cmd_ai_edit(args: argparse.Namespace) -> int:
     from openclip.engine.project import Project
     from openclip.engine.render import RenderOptions
 
+    validate_media(args.media)
     media = probe(args.media)
     if args.transcript:
         transcript = Path(args.transcript).read_text(encoding="utf-8")
@@ -785,6 +829,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--mode", choices=["frame", "patch"], default="frame")
     sp.set_defaults(func=_cmd_gaze_apply)
 
+    sp = sub.add_parser("doctor", help="check system dependencies and report status")
+    sp.set_defaults(func=_cmd_doctor)
+
     return p
 
 
@@ -794,5 +841,17 @@ def main(argv: list[str] | None = None) -> int:
     return int(args.func(args))
 
 
+@handle_errors
+def _main_entry(argv: list[str] | None = None) -> int:
+    import logging
+
+    logging.basicConfig(
+        level=logging.WARNING,
+        format="%(levelname)s: %(message)s",
+        handlers=[logging.NullHandler()],
+    )
+    return main(argv)
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_main_entry())

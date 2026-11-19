@@ -191,6 +191,16 @@ def render_edl(
     Raises when invariants are violated, when `require_review` is set and
     pending decisions remain, or when an unsupported kind was accepted.
     """
+    # Validate source media early (fail fast)
+    if media.duration_s <= 0.5:
+        raise ValueError(
+            f"Source media too short ({media.duration_s:.2f}s): minimum duration is 0.5s"
+        )
+    if not media.has_video:
+        raise ValueError("Source media has no video stream")
+    if media.width is None or media.height is None or media.width <= 0 or media.height <= 0:
+        raise ValueError(f"Invalid source media dimensions: {media.width}x{media.height}")
+
     problems = check_invariants(edl)
     if problems:
         raise ValueError("EDL invariants violated: " + "; ".join(problems))

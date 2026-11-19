@@ -246,7 +246,13 @@ class TestDirectorExtension:
         from openclip.engine.project import Project
 
         project = Project.create(source=tmp_path / "in.mp4", script_text="Hello :: Hola\n")
-        media = MediaInfo(path=tmp_path / "in.mp4", duration_s=10.0, has_video=True)
+        media = MediaInfo(
+            path=tmp_path / "in.mp4",
+            duration_s=10.0,
+            has_video=True,
+            width=1920,
+            height=1080,
+        )
         edl = EditDecisionList(
             project_source="in.mp4",
             decisions=[Decision(id="r1", kind="reframe", rationale="x", status="accepted")],
